@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── ヘルパー関数 ──────────────────────────────────
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function getRole() {
+      return get(/databases/$(database)/documents/facilities/higashikurume/staff/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isAuth() && getRole() in ['developer', 'admin', 'sub_admin'];
+    }
+
+    function isDeveloper() {
+      return isAuth() && getRole() == 'developer';
+    }
+
+    function canEditSchedule() {
+      return isAuth() && getRole() in ['developer', 'admin', 'sub_admin', 'editor'];
+    }
+
+    // ── 施設データ ────────────────────────────────────
+    match /facilities/{facilityId} {
+
+      // 職員データ：読み取りは全員、書き込みは管理者のみ
+      match /staff/{staffId} {
+        allow read:  if isAuth();
+        allow write: if isAdmin();
+        // 自分自身のプロフィール作成は許可（初回ログイン）
+        allow create: if isAuth() && request.auth.uid == staffId;
+      }
+
+      // 児童データ：読み取りは全員、書き込みは管理者のみ
+      match /children/{childId} {
+        allow read:  if isAuth();
+        allow write: if isAdmin();
+      }
+
+      // スケジュール：読み取りは全員、書き込みは編集権限以上
+      match /schedules/{yearMonth} {
+        allow read:  if isAuth();
+        allow write: if canEditSchedule();
+      }
+
+      // セッション（コマ割り当て）：読み取り全員、書き込み全員（メモは誰でも可）
+      match /sessions/{sessionDate} {
+        allow read:  if isAuth();
+        allow write: if isAuth();
+      }
+
+      // こころのひだまり：本人のみ読み書き可
+      match /hidamari/{userId} {
+        allow read, write: if isAuth() && request.auth.uid == userId;
+
+        match /logs/{logDate} {
+          allow read, write: if isAuth() && request.auth.uid == userId;
+        }
+      }
+
+      // こころのひだまり要約：管理者のみ閲覧可（本人も閲覧不可）
+      match /hidamari_summaries/{summaryId} {
+        allow read:   if isAdmin();
+        allow create: if isAuth();  // Cloudクライアントから書き込み（本人）
+        allow update, delete: if isAdmin();
+      }
+
+      // つなぎメモ
+      match /memos/{memoId} {
+        allow read:  if isAuth();
+        allow write: if isAuth();
+      }
+
+      // アイデアポスト
+      match /ideas/{ideaId} {
+        allow read:  if isAuth();
+        allow write: if isAuth();
+      }
+
+      // ひやりメモ
+      match /hazards/{hazardId} {
+        allow read:  if isAuth();
+        allow create: if isAuth();
+        allow update, delete: if isAdmin();
+      }
+
+      // まとめレポート：管理者のみ
+      match /reports/{reportId} {
+        allow read, write: if isAdmin();
+      }
+    }
+  }
+}
