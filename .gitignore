@@ -1,0 +1,27 @@
+# 依存パッケージ
+node_modules/
+functions/node_modules/
+
+# ビルド出力
+dist/
+build/
+
+# 環境変数（絶対にコミットしない）
+.env
+.env.local
+.env.production
+
+# エディタ設定
+.DS_Store
+.vscode/
+*.swp
+*.swo
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# ログ
+*.log
+npm-debug.log*
