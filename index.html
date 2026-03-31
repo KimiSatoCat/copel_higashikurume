@@ -9,8 +9,19 @@
     <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: 'M PLUS Rounded 1c', sans-serif; background: #FFF8F2; -webkit-tap-highlight-color: transparent; }
+      body {
+        font-family: 'M PLUS Rounded 1c', sans-serif;
+        background: #FFF8F2;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* スマートフォン */
       #root { max-width: 480px; margin: 0 auto; min-height: 100vh; }
+
+      /* PC（768px以上） */
+      @media (min-width: 768px) {
+        #root { max-width: none; height: 100vh; overflow: hidden; }
+        body  { overflow: hidden; }
+      }
     </style>
   </head>
   <body>

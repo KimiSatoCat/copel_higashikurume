@@ -12,35 +12,40 @@ import IdeaPost from './screens/IdeaPost'
 import Hidamari from './screens/Hidamari'
 import Settings from './screens/Settings'
 import BottomNav from './components/BottomNav'
+import SideNav   from './components/SideNav'
+
+// 768px以上をPCとみなす
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 768)
+  useEffect(() => {
+    const fn = () => setIsDesktop(window.innerWidth >= 768)
+    window.addEventListener('resize', fn)
+    return () => window.removeEventListener('resize', fn)
+  }, [])
+  return isDesktop
+}
 
 export default function App() {
   const { user, loading, getGoogleToken } = useAuth()
-  const [tab, setTab] = useState('home')
+  const [tab, setTab]   = useState('home')
+  const isDesktop       = useIsDesktop()
 
-  // ─── 毎日17:00にスプレッドシートへ自動保存 ─────────────────
+  // 毎日17:00 スプレッドシート自動保存
   useEffect(() => {
     if (!user) return
-
-    // 今日のセッションデータを取得する関数
     const getDataFn = async () => {
       const today   = new Date()
       const year    = today.getFullYear()
       const month   = today.getMonth() + 1
       const day     = today.getDate()
       const dateKey = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
-      const ref     = doc(db, 'facilities', FACILITY_ID, 'sessions', dateKey)
-      const snap    = await getDoc(ref)
-      return {
-        year, month, day,
-        slots: snap.exists() ? (snap.data().slots || []) : [],
-      }
+      const snap    = await getDoc(doc(db, 'facilities', FACILITY_ID, 'sessions', dateKey))
+      return { year, month, day, slots: snap.exists() ? snap.data().slots || [] : [] }
     }
-
-    const cleanup = scheduleDailyReport(getGoogleToken, getDataFn)
-    return cleanup
+    return scheduleDailyReport(getGoogleToken, getDataFn)
   }, [user, getGoogleToken])
 
-  // ─── 読み込み中 ────────────────────────────────────────────
+  // 読み込み中
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:C.bg, fontFamily:FONT }}>
       <div style={{ textAlign:'center' }}>
@@ -50,10 +55,8 @@ export default function App() {
     </div>
   )
 
-  // ─── 未ログイン ─────────────────────────────────────────────
   if (!user) return <Login />
 
-  // ─── メイン画面 ────────────────────────────────────────────
   const screens = {
     home:     <Home     />,
     calendar: <Calendar />,
@@ -63,6 +66,29 @@ export default function App() {
     settings: <Settings />,
   }
 
+  // ─── PC レイアウト（サイドバー＋メインコンテンツ） ─────────
+  if (isDesktop) {
+    return (
+      <div style={{ display:'flex', height:'100vh', background:C.bg, fontFamily:FONT, overflow:'hidden' }}>
+        <SideNav active={tab} setActive={setTab} />
+        <main style={{ flex:1, overflowY:'auto', overflowX:'hidden' }}>
+          {/* PC用ヘッダー */}
+          <div style={{ padding:'16px 28px', background:C.card, borderBottom:`1.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+            <div style={{ fontSize:18, fontWeight:700, color:C.text }}>
+              {tab==='home'?'🏠 ホーム':tab==='calendar'?'📅 みんなのスケジュール':tab==='sessions'?'🧩 だれが・どのコマ・どの子ども':tab==='ideas'?'📬 アイデアポスト':tab==='hidamari'?'☀️ こころのひだまり':'⚙️ 設定'}
+            </div>
+            <div style={{ fontSize:12, color:C.muted }}>コペルプラス 東久留米教室</div>
+          </div>
+          {/* コンテンツ */}
+          <div style={{ padding: tab==='hidamari'?0 : tab==='calendar'?0 : '24px 28px', maxWidth: tab==='calendar'?'none':'960px' }}>
+            {screens[tab] ?? <Home />}
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // ─── スマートフォン レイアウト ──────────────────────────────
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:C.bg, fontFamily:FONT, maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <div style={{ flex:1, overflowY:'auto', overflowX:'hidden' }}>
