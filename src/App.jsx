@@ -5,6 +5,7 @@ import Login    from './screens/Login'
 import Home     from './screens/Home'
 import Calendar from './screens/Calendar'
 import Sessions from './screens/Sessions'
+import IdeaPost from './screens/IdeaPost'
 import Hidamari from './screens/Hidamari'
 import Settings from './screens/Settings'
 import BottomNav from './components/BottomNav'
@@ -28,6 +29,7 @@ export default function App() {
     home:     <Home     />,
     calendar: <Calendar />,
     sessions: <Sessions />,
+    ideas:    <IdeaPost />,
     hidamari: <Hidamari />,
     settings: <Settings />,
   }
