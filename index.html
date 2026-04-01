@@ -4,8 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>コペルプラス 東久留米 勤務管理</title>
+    <!-- ★ 外部リソースを事前接続（フォント読み込みを高速化） -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- ★ Firebaseへの接続を事前確立 -->
+    <link rel="preconnect" href="https://firestore.googleapis.com" />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,14 +19,20 @@
         background: #FFF8F2;
         -webkit-tap-highlight-color: transparent;
       }
-      /* スマートフォン */
       #root { max-width: 480px; margin: 0 auto; min-height: 100vh; }
-
-      /* PC（768px以上） */
       @media (min-width: 768px) {
         #root { max-width: none; height: 100vh; overflow: hidden; }
         body  { overflow: hidden; }
       }
+      /* 初期ローディング（JSが読み込まれる前） */
+      #initial-loader {
+        display: flex; align-items: center; justify-content: center;
+        height: 100vh; flex-direction: column; gap: 16px;
+      }
+      #initial-loader .emoji { font-size: 52px; }
+      #initial-loader .text { font-size: 16px; color: #7A7068; }
+      /* JSが読み込まれたら非表示 */
+      #root:not(:empty) + * { display: none; }
     </style>
   </head>
   <body>

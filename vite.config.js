@@ -4,5 +4,19 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: { port: 3000 },
-  build: { outDir: 'dist' },
+  build: {
+    outDir: 'dist',
+    rollupOptions: {
+      output: {
+        // ★ ベンダーライブラリを分割してブラウザキャッシュを活用
+        manualChunks: {
+          'vendor-react':    ['react', 'react-dom'],
+          'vendor-firebase': [
+            'firebase/app', 'firebase/auth',
+            'firebase/firestore',
+          ],
+        }
+      }
+    }
+  },
 })

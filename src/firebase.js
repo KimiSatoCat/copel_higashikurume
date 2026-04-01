@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth, GoogleAuthProvider } from 'firebase/auth'
-import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore'
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
@@ -11,16 +11,15 @@ const firebaseConfig = {
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 }
 
-const app  = initializeApp(firebaseConfig)
+const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
-export const db   = getFirestore(app)
 
-// オフラインキャッシュを有効化（ネットワーク不安定でも動作する）
-enableIndexedDbPersistence(db).catch(err => {
-  // 複数タブで開いた場合などは無視
-  if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {
-    console.warn('[Firestore] persistence:', err.code)
-  }
+// ★ 新しいキャッシュAPIを使用（deprecatedのenableIndexedDbPersistenceを置き換え）
+// 複数タブでも安全に動作、オフラインでも読み書き可能
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
 })
 
 export const googleProvider = new GoogleAuthProvider()
