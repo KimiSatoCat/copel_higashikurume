@@ -158,7 +158,7 @@ export default function Sessions() {
   const addChild = (si, ci) => {
     updateSlot(si, s => ({
       ...s,
-      cards: s.cards.map((c, i) => i !== ci || c.children.length >= 5 ? c : {
+      cards: s.cards.map((c, i) => i !== ci || c.children.length >= 7 ? c : {
         ...c, children: [...c.children, { childId:'', childName:'', status:'予定', comment:'' }]
       })
     }))
@@ -329,11 +329,11 @@ export default function Sessions() {
               })}
 
               {/* 子ども追加ボタン（集団のみ） */}
-              {card.type === '集団' && card.children.length < 5 && (
+              {card.type === '集団' && card.children.length < 7 && (
                 <button type="button"
                   onClick={() => addChild(si, ci)}
                   style={{ width:'100%', padding:'7px', borderRadius:8, border:`1.5px dashed ${C.amber}`, background:'transparent', fontSize:12, fontWeight:600, color:'#B07800', cursor:'pointer', fontFamily:FONT, marginBottom:7 }}>
-                  ＋ 子どもを追加（{card.children.length}/5名）
+                  ＋ 子どもを追加（{card.children.length}/7名）
                 </button>
               )}
 

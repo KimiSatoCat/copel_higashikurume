@@ -27,7 +27,7 @@ export async function writeDailyReport(accessToken, data) {
   // 列構成: 日付,曜日,コマ,時間帯,タイプ, [職員①,子①名前,子①出欠,子①コメント] ×5, 集団メモ, 備考
   const rows = slots.map((s, si) => {
     const childCols = []
-    for (let ci = 0; ci < 5; ci++) {
+    for (let ci = 0; ci < 7; ci++) {
       const ch = (s.children || [])[ci] || {}
       childCols.push(
         s.staffName || '',          // 担当職員
