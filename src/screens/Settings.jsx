@@ -90,11 +90,13 @@ export default function Settings() {
         name:          acctForm.name.trim(),
         birthday:      acctForm.birthday,
       }
-      await setDoc(doc(db,'facilities',FACILITY_ID,'staff',user.uid), data, { merge:true })
-      updateLocalProfile(data)  // Firestoreを再取得せず即時反映
+      // ★ UIを先に更新してから保存
+      updateLocalProfile(data)
       setAcctEdit(false)
       setAcctMsg('✅ 保存しました')
       setTimeout(() => setAcctMsg(''), 3000)
+      setDoc(doc(db,'facilities',FACILITY_ID,'staff',user.uid), data, { merge:true })
+        .catch(err => console.error('[saveAccount]', err.message))
     } catch (err) {
       setAcctMsg(`❌ ${err.message}`)
     }
@@ -103,45 +105,38 @@ export default function Settings() {
 
   // ─── 職員保存（ローカル即時更新） ────────────────────────
   const saveStaff = async (s) => {
-    try {
-      await setDoc(doc(db,'facilities',FACILITY_ID,'staff',s.id), s, { merge:true })
-      // ローカル状態を即時更新（再フェッチしない）
-      setStaffList(prev => prev.some(x=>x.id===s.id)
-        ? prev.map(x => x.id===s.id ? s : x)
-        : [...prev, s]
-      )
-      return true
-    } catch (err) {
-      alert(`保存に失敗しました: ${err.message}`)
-      return false
-    }
+    // ★ UIを先に更新（Firestoreの応答を待たない）
+    setStaffList(prev => prev.some(x=>x.id===s.id)
+      ? prev.map(x => x.id===s.id ? s : x)
+      : [...prev, s]
+    )
+    // バックグラウンドで保存（エラーはコンソールに記録するだけ）
+    setDoc(doc(db,'facilities',FACILITY_ID,'staff',s.id), s, { merge:true })
+      .catch(err => console.error('[saveStaff]', err.message))
+    return true
   }
 
   // ─── 職員削除 ────────────────────────────────────────────
   const deleteStaff = async (id, name) => {
-    if (!confirm(`「${name}」を削除しますか？この操作は元に戻せません。`)) return
-    try {
-      await deleteDoc(doc(db,'facilities',FACILITY_ID,'staff',id))
-      setStaffList(prev => prev.filter(x => x.id !== id))
-    } catch (err) {
-      alert(`削除に失敗しました: ${err.message}`)
-    }
+    if (!confirm(`「${name}」を削除しますか？`)) return
+    // ★ UIを先に更新
+    setStaffList(prev => prev.filter(x => x.id !== id))
+    deleteDoc(doc(db,'facilities',FACILITY_ID,'staff',id))
+      .catch(err => console.error('[deleteStaff]', err.message))
   }
 
   // ─── 児童保存 ────────────────────────────────────────────
   const saveChild = async (c) => {
     const id = c.id || `child_${Date.now()}`
-    try {
-      await setDoc(doc(db,'facilities',FACILITY_ID,'children',id), { ...c, id, active:true }, { merge:true })
-      setChildren(prev => prev.some(x=>x.id===id)
-        ? prev.map(x => x.id===id ? {...c,id} : x)
-        : [...prev, {...c,id}]
-      )
-      return true
-    } catch (err) {
-      alert(`保存に失敗しました: ${err.message}`)
-      return false
-    }
+    const saved = { ...c, id, active:true }
+    // ★ UIを先に更新
+    setChildren(prev => prev.some(x=>x.id===id)
+      ? prev.map(x => x.id===id ? saved : x)
+      : [...prev, saved]
+    )
+    setDoc(doc(db,'facilities',FACILITY_ID,'children',id), saved, { merge:true })
+      .catch(err => console.error('[saveChild]', err.message))
+    return true
   }
 
   // ─── 権限変更（ローカル即時更新） ────────────────────────
@@ -282,19 +277,15 @@ export default function Settings() {
 // ── 職員管理 ────────────────────────────────────────────────
 function StaffTab({ staffList, onSave, onDelete, onAddTest }) {
   const [editing, setEditing] = useState(null)
-  const [saving,  setSaving]  = useState(false)
-
   const startNew = () => setEditing({
     id: `staff_${Date.now()}`, name:'', hiraganaFirst:'',
     hiraganaName:'', email:'', birthday:'', color:'#52BAA8',
     active:true, role:'staff',
   })
 
-  const handleSave = async (s) => {
-    setSaving(true)
-    const ok = await onSave({ ...s, hiraganaName: s.hiraganaFirst })
-    setSaving(false)
-    if (ok) setEditing(null)
+  const handleSave = (s) => {
+    onSave({ ...s, hiraganaName: s.hiraganaFirst })
+    setEditing(null)  // 即座に閉じる
   }
 
   return (
@@ -356,9 +347,9 @@ function StaffTab({ staffList, onSave, onDelete, onAddTest }) {
                 style={{ flex:1, padding:'12px', borderRadius:11, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:14, fontWeight:600, color:C.sub, cursor:'pointer', fontFamily:FONT }}>
                 キャンセル
               </button>
-              <button onClick={() => handleSave(editing)} disabled={saving}
-                style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:saving?C.bg:C.primary, fontSize:14, fontWeight:700, color:saving?C.muted:'#fff', cursor:saving?'wait':'pointer', fontFamily:FONT }}>
-                {saving ? '保存中…' : '保存する'}
+              <button onClick={() => handleSave(editing)}
+                style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:C.primary, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>
+                保存する
               </button>
             </div>
           </div>
@@ -371,15 +362,11 @@ function StaffTab({ staffList, onSave, onDelete, onAddTest }) {
 // ── 児童管理 ────────────────────────────────────────────────
 function ChildrenTab({ children, onSave }) {
   const [editing, setEditing] = useState(null)
-  const [saving,  setSaving]  = useState(false)
-
   const startNew = () => setEditing({ name:'', birthday:'', emergency1_name:'', emergency1_tel:'', allergy:'', memo:'' })
 
-  const handleSave = async (c) => {
-    setSaving(true)
-    const ok = await onSave(c)
-    setSaving(false)
-    if (ok) setEditing(null)
+  const handleSave = (c) => {
+    onSave(c)
+    setEditing(null)  // 即座に閉じる
   }
 
   return (
@@ -431,9 +418,9 @@ function ChildrenTab({ children, onSave }) {
                 style={{ flex:1, padding:'12px', borderRadius:11, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:14, fontWeight:600, color:C.sub, cursor:'pointer', fontFamily:FONT }}>
                 キャンセル
               </button>
-              <button onClick={() => handleSave(editing)} disabled={saving}
-                style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:saving?C.bg:C.primary, fontSize:14, fontWeight:700, color:saving?C.muted:'#fff', cursor:saving?'wait':'pointer', fontFamily:FONT }}>
-                {saving ? '保存中…' : '保存する'}
+              <button onClick={() => handleSave(editing)}
+                style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:C.primary, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>
+                保存する
               </button>
             </div>
           </div>
