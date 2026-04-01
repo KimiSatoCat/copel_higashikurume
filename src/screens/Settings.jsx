@@ -141,15 +141,16 @@ export default function Settings() {
 
   // ─── 権限変更（ローカル即時更新） ────────────────────────
   const updateRole = async (uid, newRole) => {
-    // ローカルを先に更新（即時反映）
     setStaffList(prev => prev.map(s => s.id===uid ? {...s, role:newRole} : s))
-    try {
-      await updateDoc(doc(db,'facilities',FACILITY_ID,'staff',uid), { role: newRole })
-    } catch (err) {
-      // 失敗したらローカルを戻す
-      setStaffList(prev => prev.map(s => s.id===uid ? {...s, role: s.role} : s))
-      alert(`権限の変更に失敗しました。\n${err.message}\n\nFirebaseコンソールで自分のroleを「admin」に変更してから試してください。`)
+    // 自分自身の権限を変更した場合 → AuthContextにも即時反映（ページリロード不要）
+    if (uid === user?.uid) {
+      updateLocalProfile({ role: newRole })
     }
+    updateDoc(doc(db,'facilities',FACILITY_ID,'staff',uid), { role: newRole })
+      .catch(err => {
+        setStaffList(prev => prev.map(s => s.id===uid ? {...s, role: s.role} : s))
+        alert(`権限の変更に失敗しました。\n${err.message}\n\nFirebaseコンソールで自分のroleを「admin」に変更してから試してください。`)
+      })
   }
 
   // ─── テスト職員追加 ──────────────────────────────────────
