@@ -2,71 +2,81 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAuth() { return request.auth != null; }
-    function getRole() {
-      return get(/databases/$(database)/documents/facilities/higashikurume/staff/$(request.auth.uid)).data.role;
+    function isAuth() {
+      return request.auth != null;
     }
+
+    // roleが存在しない場合も安全に処理する
+    function getRole() {
+      let doc = get(/databases/$(database)/documents/facilities/higashikurume/staff/$(request.auth.uid));
+      return doc.data.get('role', 'staff');
+    }
+
     function isAdmin() {
       return isAuth() && getRole() in ['developer','admin','sub_admin'];
     }
+
+    function isDeveloper() {
+      return isAuth() && getRole() == 'developer';
+    }
+
     function canEditSchedule() {
       return isAuth() && getRole() in ['developer','admin','sub_admin','editor'];
     }
 
     match /facilities/{facilityId} {
 
-      // 職員
+      // 職員：自分のドキュメントは自分で作成・更新可能。他人の更新は管理者のみ
       match /staff/{staffId} {
-        allow read: if isAuth();
+        allow read:   if isAuth();
         allow create: if isAuth() && request.auth.uid == staffId;
-        allow update, delete: if isAdmin();
+        // 自分のプロフィール更新（名前・ひらがな・誕生日）は全員可
+        // 他人のroleを変更するのは管理者のみ
+        allow update: if isAuth() && (
+          request.auth.uid == staffId ||
+          isAdmin()
+        );
+        allow delete: if isAdmin();
       }
 
       // 児童
       match /children/{childId} {
-        allow read: if isAuth();
+        allow read:  if isAuth();
         allow write: if isAdmin();
       }
 
       // スケジュール
       match /schedules/{yearMonth} {
-        allow read: if isAuth();
+        allow read:  if isAuth();
         allow write: if canEditSchedule();
       }
 
-      // セッション（コマ割り当て・出欠）
+      // セッション
       match /sessions/{sessionDate} {
         allow read, write: if isAuth();
       }
 
       // つなぎメモ
       match /memos/{memoId} {
-        allow read: if isAuth();
-        allow create: if isAuth();
-        allow update: if isAuth(); // 既読更新
+        allow read, create, update: if isAuth();
         allow delete: if isAdmin();
       }
 
-      // アイデアポスト（匿名投稿・リアクション・コメント）
+      // アイデアポスト
       match /ideas/{ideaId} {
-        allow read: if isAuth();
-        allow create: if isAuth();
-        allow update: if isAuth(); // リアクション・コメント追加
+        allow read, create, update: if isAuth();
         allow delete: if isAdmin();
       }
 
       // ひやりメモ
       match /hazards/{hazardId} {
-        allow read: if isAuth();
-        allow create: if isAuth();
-        allow update: if isAdmin();
-        allow delete: if isAdmin();
+        allow read, create: if isAuth();
+        allow update, delete: if isAdmin();
       }
 
       // ありがとうカード
       match /thanks/{thankId} {
-        allow read: if isAuth();
-        allow create: if isAuth();
+        allow read, create: if isAuth();
         allow update, delete: if isAdmin();
       }
 
@@ -78,7 +88,7 @@ service cloud.firestore {
         }
       }
 
-      // こころのひだまり 要約（管理者のみ閲覧）
+      // こころのひだまり要約（管理者のみ閲覧）
       match /hidamari_summaries/{summaryId} {
         allow read: if isAdmin();
         allow create: if isAuth();

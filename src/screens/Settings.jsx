@@ -1,275 +1,444 @@
-import { useState, useEffect } from 'react'
-import { collection, getDocs, doc, updateDoc, setDoc } from 'firebase/firestore'
+import { useState, useEffect, useCallback } from 'react'
+import { collection, getDocs, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT, ROLES } from '../theme'
 
-const ROLE_LABELS = { developer:'開発者', admin:'責任者', sub_admin:'副責任者', editor:'スケジュール編集', staff:'一般職員' }
+const ROLE_LABELS = {
+  developer: '開発者',
+  admin:     '責任者',
+  sub_admin: '副責任者',
+  editor:    'スケジュール編集',
+  staff:     '一般職員',
+}
 const ROLE_COLORS = {
-  developer:{bg:C.coralLight,c:'#CC5040'},
-  admin:{bg:C.purpleLight,c:'#8060C0'},
-  sub_admin:{bg:C.blueLight,c:'#2070A0'},
-  editor:{bg:C.primaryLight,c:C.primaryDark},
-  staff:{bg:C.bg,c:C.sub},
+  developer: { bg: C.coralLight,   c: '#CC5040' },
+  admin:     { bg: C.purpleLight,  c: '#8060C0' },
+  sub_admin: { bg: C.blueLight,    c: '#2070A0' },
+  editor:    { bg: C.primaryLight, c: C.primaryDark },
+  staff:     { bg: C.bg,           c: C.sub },
 }
 
 export default function Settings() {
-  const { user, profile, role, devMode, devSecsLeft, enableDevMode, clearDevMode, verifyDevPassword, signOut, can, loadProfile } = useAuth()
-  const [tab, setTab] = useState('none')
-  const [staffList, setStaffList] = useState([])
-  const [children, setChildren] = useState([])
-  const [pwInput, setPwInput] = useState('')
-  const [pwError, setPwError] = useState('')
-  const [editingStaff, setEditingStaff] = useState(null)
-  const [editingChild, setEditingChild] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [accountEdit, setAccountEdit] = useState(false)
-  const [accountForm, setAccountForm] = useState({ name:'', hiraganaName:'', birthday:'' })
+  const {
+    user, profile, role,
+    devMode, devSecsLeft, enableDevMode, clearDevMode,
+    verifyDevPassword, signOut, can, loadProfile,
+  } = useAuth()
+
+  const [tab,          setTab]         = useState('none')
+  const [staffList,    setStaffList]   = useState([])
+  const [children,     setChildren]    = useState([])
+  const [pwInput,      setPwInput]     = useState('')
+  const [pwError,      setPwError]     = useState('')
+  const [editingStaff, setEditingStaff]= useState(null)
+  const [editingChild, setEditingChild]= useState(null)
+  const [saving,       setSaving]      = useState(false)
+  const [saveMsg,      setSaveMsg]     = useState('')
+
+  // アカウント設定フォーム
+  const [acctEdit, setAcctEdit] = useState(false)
+  const [acctForm, setAcctForm] = useState({
+    hiraganaFirst: '',  // 下の名前のみ（ひらがな）
+    name:          '',  // フルネーム（漢字）
+    birthday:      '',
+  })
+
   const spreadsheetId = import.meta.env.VITE_SPREADSHEET_ID || ''
 
+  // プロフィールが更新されたらフォームに反映
   useEffect(() => {
-    if (profile) setAccountForm({ name:profile.name||'', hiraganaName:profile.hiraganaName||'', birthday:profile.birthday||'' })
+    if (profile) {
+      setAcctForm({
+        hiraganaFirst: profile.hiraganaFirst || profile.hiraganaName?.split(' ')[0] || '',
+        name:          profile.name || '',
+        birthday:      profile.birthday || '',
+      })
+    }
   }, [profile])
 
-  const refreshStaff = () => getDocs(collection(db,'facilities',FACILITY_ID,'staff')).then(s=>setStaffList(s.docs.map(d=>({id:d.id,...d.data()}))))
-  const refreshChildren = () => getDocs(collection(db,'facilities',FACILITY_ID,'children')).then(s=>setChildren(s.docs.map(d=>({id:d.id,...d.data()}))))
+  const refreshStaff = useCallback(() =>
+    getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
+      .then(s => setStaffList(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+    []
+  )
+  const refreshChildren = useCallback(() =>
+    getDocs(collection(db, 'facilities', FACILITY_ID, 'children'))
+      .then(s => setChildren(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+    []
+  )
 
-  useEffect(() => { if(can.editStaff()||devMode){ refreshStaff(); refreshChildren() } }, [devMode])
+  useEffect(() => {
+    if (can.editStaff() || devMode) { refreshStaff(); refreshChildren() }
+  }, [devMode])
 
+  // ─── 開発者パスワード認証 ────────────────────────────────
   const verifyDev = async () => {
     const ok = await verifyDevPassword(pwInput)
-    if (ok) { enableDevMode(); setPwInput(''); setPwError(''); setTab('roles'); refreshStaff() }
-    else setPwError('パスワードが正しくありません')
+    if (ok) {
+      enableDevMode()
+      setPwInput('')
+      setPwError('')
+      setTab('roles')
+      refreshStaff()
+    } else {
+      setPwError('パスワードが正しくありません')
+    }
   }
 
+  // ─── 自分のプロフィール保存 ──────────────────────────────
   const saveAccount = async () => {
+    if (!user) return
     setSaving(true)
-    await setDoc(doc(db,'facilities',FACILITY_ID,'staff',user.uid), {
-      name: accountForm.name,
-      hiraganaName: accountForm.hiraganaName,
-      birthday: accountForm.birthday,
-    }, { merge:true })
-    await loadProfile(user)
-    setAccountEdit(false)
+    setSaveMsg('')
+    try {
+      const ref  = doc(db, 'facilities', FACILITY_ID, 'staff', user.uid)
+      const data = {
+        hiraganaFirst: acctForm.hiraganaFirst.trim(),
+        hiraganaName:  acctForm.hiraganaFirst.trim(),  // 互換性のため両方保存
+        name:          acctForm.name.trim(),
+        birthday:      acctForm.birthday,
+      }
+      await setDoc(ref, data, { merge: true })
+      await loadProfile(user)  // AuthContext の profile を更新
+      setAcctEdit(false)
+      setSaveMsg('✅ 保存しました')
+      setTimeout(() => setSaveMsg(''), 3000)
+    } catch (err) {
+      console.error('[Settings] プロフィール保存エラー:', err)
+      setSaveMsg(`❌ 保存に失敗しました: ${err.message}`)
+    }
     setSaving(false)
   }
 
-  const saveStaff = async (s) => { setSaving(true); await setDoc(doc(db,'facilities',FACILITY_ID,'staff',s.id),s,{merge:true}); refreshStaff(); setEditingStaff(null); setSaving(false) }
-  const saveChild = async (c) => { setSaving(true); await setDoc(doc(db,'facilities',FACILITY_ID,'children',c.id||`c_${Date.now()}`),{...c,active:true},{merge:true}); refreshChildren(); setEditingChild(null); setSaving(false) }
-  const updateRole = async (uid, nr) => { await updateDoc(doc(db,'facilities',FACILITY_ID,'staff',uid),{role:nr}); setStaffList(prev=>prev.map(s=>s.id===uid?{...s,role:nr}:s)) }
+  // ─── 職員情報保存（管理者） ──────────────────────────────
+  const saveStaff = async (s) => {
+    setSaving(true)
+    try {
+      await setDoc(doc(db, 'facilities', FACILITY_ID, 'staff', s.id), s, { merge: true })
+      await refreshStaff()
+      setEditingStaff(null)
+    } catch (err) {
+      alert(`保存エラー: ${err.message}`)
+    }
+    setSaving(false)
+  }
+
+  // ─── 児童情報保存（管理者） ──────────────────────────────
+  const saveChild = async (c) => {
+    setSaving(true)
+    try {
+      const id = c.id || `child_${Date.now()}`
+      await setDoc(doc(db, 'facilities', FACILITY_ID, 'children', id), { ...c, active: true }, { merge: true })
+      await refreshChildren()
+      setEditingChild(null)
+    } catch (err) {
+      alert(`保存エラー: ${err.message}`)
+    }
+    setSaving(false)
+  }
+
+  // ─── 権限変更（管理者） ──────────────────────────────────
+  const updateRole = async (uid, newRole) => {
+    try {
+      await updateDoc(doc(db, 'facilities', FACILITY_ID, 'staff', uid), { role: newRole })
+      // ローカル状態をすぐに更新（リロード不要）
+      setStaffList(prev => prev.map(s => s.id === uid ? { ...s, role: newRole } : s))
+    } catch (err) {
+      alert(`権限の変更に失敗しました。\n${err.message}\n\n※ 管理者権限が必要です。Firebaseコンソールで自分のroleを「admin」または「developer」に変更してから試してください。`)
+    }
+  }
+
+  // ─── テスト職員の追加（初期データセットアップ） ──────────
+  const addTestStaff = async () => {
+    setSaving(true)
+    try {
+      const testId  = 'test_staff_001'
+      const testRef = doc(db, 'facilities', FACILITY_ID, 'staff', testId)
+      const snap    = await getDoc(testRef)
+      if (!snap.exists()) {
+        await setDoc(testRef, {
+          uid:          testId,
+          name:         'テスト 職員',
+          hiraganaFirst: 'てすと',
+          hiraganaName:  'てすと しょくいん',
+          email:         'test@example.com',
+          role:          'staff',
+          active:        true,
+          color:         '#9E9E9E',
+          createdAt:     new Date().toISOString(),
+        })
+        await refreshStaff()
+        alert('✅「テスト 職員」を追加しました')
+      } else {
+        alert('「テスト 職員」はすでに存在します')
+      }
+    } catch (err) {
+      alert(`エラー: ${err.message}`)
+    }
+    setSaving(false)
+  }
+
+  // ─── 表示名の計算 ────────────────────────────────────────
+  const dispFirst = profile?.hiraganaFirst || profile?.hiraganaName?.split(' ')[0] || ''
+  const dispName  = dispFirst ? `${dispFirst}先生` : (profile?.name ? `${profile.name}先生` : '先生')
+  const rc        = ROLE_COLORS[role] || ROLE_COLORS.staff
 
   const Tab = ({ id, label }) => (
-    <button onClick={() => setTab(t => t===id?'none':id)}
-      style={{ padding:'8px 12px', borderRadius:10, border:`1.5px solid ${tab===id?C.primary:C.border}`, background:tab===id?C.primaryLight:'transparent', fontSize:13, fontWeight:tab===id?700:400, color:tab===id?C.primaryDark:C.sub, cursor:'pointer', fontFamily:FONT, flexShrink:0 }}>
+    <button onClick={() => setTab(t => t === id ? 'none' : id)}
+      style={{ padding: '8px 12px', borderRadius: 10, border: `1.5px solid ${tab===id?C.primary:C.border}`, background: tab===id?C.primaryLight:'transparent', fontSize: 13, fontWeight: tab===id?700:400, color: tab===id?C.primaryDark:C.sub, cursor: 'pointer', fontFamily: FONT, flexShrink: 0 }}>
       {label}
     </button>
   )
 
-  const hira = profile?.hiraganaName || ''
-  const kanji = profile?.name || user?.displayName || ''
-  const displayName = hira ? `${hira}先生` : (kanji ? `${kanji}先生` : '先生')
-
   return (
-    <div style={{ padding:'16px' }}>
-      <div style={{ fontSize:19, fontWeight:800, color:C.text, marginBottom:14 }}>⚙️ 設定</div>
+    <div style={{ padding: '16px' }}>
+      <div style={{ fontSize: 19, fontWeight: 800, color: C.text, marginBottom: 14 }}>⚙️ 設定</div>
 
       {/* ── プロフィールカード ── */}
-      <div style={{ background:`linear-gradient(135deg,${C.primaryLight},${C.bg})`, borderRadius:20, padding:'16px 18px', marginBottom:14, border:`1.5px solid ${C.primary}44` }}>
-        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+      <div style={{ background: `linear-gradient(135deg,${C.primaryLight},${C.bg})`, borderRadius: 20, padding: '16px 18px', marginBottom: 14, border: `1.5px solid ${C.primary}44` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {user?.photoURL
-            ? <img src={user.photoURL} alt="" style={{ width:54, height:54, borderRadius:'50%', objectFit:'cover', border:`2px solid ${C.primary}` }}/>
-            : <div style={{ width:54, height:54, borderRadius:'50%', background:C.primaryLight, border:`2px solid ${C.primary}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:C.primaryDark, fontWeight:800 }}>{(kanji||'先')[0]}</div>
+            ? <img src={user.photoURL} alt="" style={{ width: 54, height: 54, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${C.primary}` }}/>
+            : <div style={{ width: 54, height: 54, borderRadius: '50%', background: C.primaryLight, border: `2px solid ${C.primary}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: C.primaryDark, fontWeight: 800 }}>
+                {(profile?.name || '先')[0]}
+              </div>
           }
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:22, fontWeight:800, color:C.text, lineHeight:1.2 }}>{displayName}</div>
-            {hira && kanji && <div style={{ fontSize:14, color:C.sub, marginTop:2 }}>{kanji}</div>}
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:5 }}>
-              <span style={{ background:ROLE_COLORS[role]?.bg||C.bg, color:ROLE_COLORS[role]?.c||C.sub, borderRadius:99, padding:'2px 10px', fontSize:12, fontWeight:700 }}>{ROLE_LABELS[role]||'一般職員'}</span>
-              <button onClick={() => setAccountEdit(v=>!v)}
-                style={{ border:'none', background:'transparent', fontSize:12, color:C.primary, cursor:'pointer', fontFamily:FONT, fontWeight:600, padding:0 }}>
-                {accountEdit ? '閉じる ×' : 'アカウント設定を開く ›'}
+          <div style={{ flex: 1 }}>
+            {/* ひらがな名（下の名前）＋先生 → 大きく表示 */}
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.text, lineHeight: 1.2 }}>{dispName}</div>
+            {/* フルネーム（漢字） */}
+            {profile?.name && <div style={{ fontSize: 14, color: C.sub, marginTop: 2 }}>{profile.name}</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+              <span style={{ background: rc.bg, color: rc.c, borderRadius: 99, padding: '2px 10px', fontSize: 12, fontWeight: 700 }}>
+                {ROLE_LABELS[role] || '一般職員'}
+              </span>
+              <button onClick={() => setAcctEdit(v => !v)}
+                style={{ border: 'none', background: 'transparent', fontSize: 12, color: C.primary, cursor: 'pointer', fontFamily: FONT, fontWeight: 600, padding: 0 }}>
+                {acctEdit ? '閉じる ×' : 'アカウント設定 ›'}
               </button>
             </div>
           </div>
         </div>
 
         {/* アカウント設定フォーム */}
-        {accountEdit && (
-          <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${C.primary}33` }}>
-            <div style={{ fontSize:13, color:C.sub, marginBottom:12, lineHeight:1.6 }}>
-              ひらがな名は「〇〇先生」と表示されます。<br/>
-              フルネーム（漢字）はカレンダーの勤務表に反映されます。
+        {acctEdit && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.primary}33` }}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 12, lineHeight: 1.6 }}>
+              ※「下の名前（ひらがな）」が「〇〇先生」として画面上部に大きく表示されます。<br/>
+              フルネーム（漢字）はカレンダーの勤務表と連動します。
             </div>
-            {[
-              { key:'hiraganaName', label:'ひらがなの名前', type:'text', ph:'やまだ たろう' },
-              { key:'name',         label:'フルネーム（漢字）', type:'text', ph:'山田 太郎' },
-              { key:'birthday',     label:'誕生日', type:'date', ph:'' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom:10 }}>
-                <div style={{ fontSize:12, color:C.sub, marginBottom:4 }}>{f.label}</div>
-                <input type={f.type} value={accountForm[f.key]||''} placeholder={f.ph}
-                  onChange={e => setAccountForm(p=>({...p,[f.key]:e.target.value}))}
-                  style={{ width:'100%', padding:'11px 13px', borderRadius:10, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:FONT, outline:'none', color:C.text, boxSizing:'border-box' }}
-                />
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>下の名前（ひらがな）　例：たろう</div>
+              <input
+                autoComplete="off"
+                value={acctForm.hiraganaFirst}
+                onChange={e => {
+                  const v = e.target.value
+                  setAcctForm(p => ({ ...p, hiraganaFirst: v }))
+                }}
+                placeholder="たろう"
+                style={{ width: '100%', padding: '11px 13px', borderRadius: 10, border: `1.5px solid ${C.border}`, fontSize: 14, fontFamily: FONT, outline: 'none', color: C.text, boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>フルネーム（漢字）　例：山田 太郎</div>
+              <input
+                autoComplete="off"
+                value={acctForm.name}
+                onChange={e => setAcctForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="山田 太郎"
+                style={{ width: '100%', padding: '11px 13px', borderRadius: 10, border: `1.5px solid ${C.border}`, fontSize: 14, fontFamily: FONT, outline: 'none', color: C.text, boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>誕生日</div>
+              <input
+                type="date"
+                autoComplete="off"
+                value={acctForm.birthday}
+                onChange={e => setAcctForm(p => ({ ...p, birthday: e.target.value }))}
+                style={{ width: '100%', padding: '11px 13px', borderRadius: 10, border: `1.5px solid ${C.border}`, fontSize: 14, fontFamily: FONT, outline: 'none', color: C.text, boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {saveMsg && (
+              <div style={{ padding: '8px 12px', borderRadius: 10, background: saveMsg.startsWith('✅') ? C.primaryLight : C.coralLight, color: saveMsg.startsWith('✅') ? C.primaryDark : C.coral, fontSize: 13, marginBottom: 10 }}>
+                {saveMsg}
               </div>
-            ))}
-            <div style={{ display:'flex', gap:9, marginTop:6 }}>
-              <button onClick={() => setAccountEdit(false)} style={{ flex:1, padding:'11px', borderRadius:10, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:13, fontWeight:600, color:C.sub, cursor:'pointer', fontFamily:FONT }}>キャンセル</button>
-              <button onClick={saveAccount} disabled={saving} style={{ flex:2, padding:'11px', borderRadius:10, border:'none', background:C.primary, fontSize:13, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>{saving?'保存中…':'保存する'}</button>
+            )}
+
+            <div style={{ display: 'flex', gap: 9 }}>
+              <button onClick={() => setAcctEdit(false)}
+                style={{ flex: 1, padding: '11px', borderRadius: 10, border: `1.5px solid ${C.border}`, background: 'transparent', fontSize: 13, fontWeight: 600, color: C.sub, cursor: 'pointer', fontFamily: FONT }}>
+                キャンセル
+              </button>
+              <button onClick={saveAccount} disabled={saving}
+                style={{ flex: 2, padding: '11px', borderRadius: 10, border: 'none', background: saving ? C.bg : C.primary, fontSize: 13, fontWeight: 700, color: saving ? C.muted : '#fff', cursor: saving ? 'wait' : 'pointer', fontFamily: FONT }}>
+                {saving ? '保存中…' : '保存する'}
+              </button>
             </div>
           </div>
         )}
       </div>
 
       {/* ── タブ ── */}
-      <div style={{ display:'flex', gap:7, overflowX:'auto', marginBottom:16, paddingBottom:2 }}>
-        {can.editStaff() && <Tab id="staff" label="職員管理"/>}
-        {can.editChildren() && <Tab id="children" label="児童管理"/>}
-        {(devMode||can.assignAdmin()) && <Tab id="roles" label="権限設定"/>}
+      <div style={{ display: 'flex', gap: 7, overflowX: 'auto', marginBottom: 16, paddingBottom: 2 }}>
+        {(can.editStaff() || devMode) && <Tab id="staff"    label="職員管理"/>}
+        {(can.editChildren() || devMode) && <Tab id="children" label="児童管理"/>}
+        {(devMode || can.assignAdmin()) && <Tab id="roles"   label="権限設定"/>}
         <Tab id="records" label="📊 これまでの記録"/>
-        <Tab id="dev" label="🔐 開発者"/>
+        <Tab id="dev"     label="🔐 開発者"/>
       </div>
 
-      {tab==='staff' && can.editStaff() && <StaffTab staffList={staffList} editingStaff={editingStaff} setEditingStaff={setEditingStaff} saveStaff={saveStaff} saving={saving}/>}
-      {tab==='children' && can.editChildren() && <ChildrenTab children={children} editingChild={editingChild} setEditingChild={setEditingChild} saveChild={saveChild} saving={saving}/>}
-      {tab==='roles' && (devMode||can.assignAdmin()) && <RolesTab staffList={staffList} updateRole={updateRole} devMode={devMode} role={role} ROLES={ROLES} ROLE_LABELS={ROLE_LABELS} ROLE_COLORS={ROLE_COLORS}/>}
-      {tab==='records' && <RecordsTab spreadsheetId={spreadsheetId}/>}
-      {tab==='dev' && <DevTab devMode={devMode} devSecsLeft={devSecsLeft} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode}/>}
+      {/* ── 各タブの内容 ── */}
+      {tab === 'staff'    && (can.editStaff() || devMode) &&
+        <StaffTab staffList={staffList} editingStaff={editingStaff} setEditingStaff={setEditingStaff} saveStaff={saveStaff} saving={saving} addTestStaff={addTestStaff}/>}
+      {tab === 'children' && (can.editChildren() || devMode) &&
+        <ChildrenTab children={children} editingChild={editingChild} setEditingChild={setEditingChild} saveChild={saveChild} saving={saving}/>}
+      {tab === 'roles'    && (devMode || can.assignAdmin()) &&
+        <RolesTab staffList={staffList} updateRole={updateRole} devMode={devMode} role={role} ROLES={ROLES} ROLE_LABELS={ROLE_LABELS} ROLE_COLORS={ROLE_COLORS}/>}
+      {tab === 'records'  && <RecordsTab spreadsheetId={spreadsheetId}/>}
+      {tab === 'dev'      && <DevTab devMode={devMode} devSecsLeft={devSecsLeft} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode} addTestStaff={addTestStaff}/>}
 
-      <button onClick={signOut} style={{ width:'100%', padding:'13px', borderRadius:14, border:`1.5px solid ${C.coral}44`, background:C.coralLight, fontSize:14, fontWeight:700, color:C.coral, cursor:'pointer', fontFamily:FONT, marginTop:14 }}>
+      {/* ── ログアウト ── */}
+      <button onClick={signOut}
+        style={{ width: '100%', padding: '13px', borderRadius: 14, border: `1.5px solid ${C.coral}44`, background: C.coralLight, fontSize: 14, fontWeight: 700, color: C.coral, cursor: 'pointer', fontFamily: FONT, marginTop: 14 }}>
         ログアウト
       </button>
     </div>
   )
 }
 
-function RecordsTab({ spreadsheetId }) {
-  const url = spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}` : null
-  return (
-    <div style={{ background:C.card, borderRadius:18, padding:16, border:`1.5px solid ${C.border}` }}>
-      <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:8 }}>📊 これまでの記録</div>
-      <div style={{ fontSize:13, color:C.sub, lineHeight:1.7, marginBottom:12 }}>
-        毎日17:00に，その日の支援記録がGoogleスプレッドシートへ自動保存されます。2026年4月〜2035年12月の10年分（117シート）。
-      </div>
-      <div style={{ display:'flex', gap:6, marginBottom:12, flexWrap:'wrap' }}>
-        {[['土曜','#E3F2FD','#1565C0'],['日祝','#FFECEA','#CC3333'],['水曜','#FFFDE7','#7B6000']].map(([l,bg,c])=>(
-          <span key={l} style={{ background:bg, color:c, borderRadius:6, padding:'3px 10px', fontSize:12, fontWeight:600 }}>{l}</span>
-        ))}
-      </div>
-      {url ? (
-        <a href={url} target="_blank" rel="noopener noreferrer"
-          style={{ display:'block', padding:'13px', borderRadius:12, border:'none', background:C.primary, color:'#fff', fontSize:14, fontWeight:700, textAlign:'center', textDecoration:'none', fontFamily:FONT }}>
-          📊 Googleスプレッドシートを開く
-        </a>
-      ) : (
-        <div style={{ background:C.amberLight, borderRadius:10, padding:'10px 12px', fontSize:13, color:'#7A5000' }}>
-          .env の VITE_SPREADSHEET_ID を設定してください
-        </div>
-      )}
-    </div>
-  )
-}
-
-function StaffTab({ staffList, editingStaff, setEditingStaff, saveStaff, saving }) {
-  const blank = { name:'', hiraganaName:'', email:'', birthday:'', color:C.primary, active:true, role:'staff' }
+// ── 職員管理 ────────────────────────────────────────────────
+function StaffTab({ staffList, editingStaff, setEditingStaff, saveStaff, saving, addTestStaff }) {
+  const blank = { name: '', hiraganaFirst: '', hiraganaName: '', email: '', birthday: '', color: '#52BAA8', active: true, role: 'staff' }
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-        <div style={{ fontSize:14, fontWeight:700, color:C.text }}>職員一覧</div>
-        <button onClick={() => setEditingStaff({...blank, id:'new_'+Date.now()})}
-          style={{ padding:'7px 13px', borderRadius:10, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>＋ 追加</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C2926' }}>職員一覧</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={addTestStaff}
+            style={{ padding: '7px 12px', borderRadius: 10, border: `1.5px solid #9E9E9E`, background: '#F5F5F5', color: '#666', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: FONT }}>
+            ＋ テスト追加
+          </button>
+          <button onClick={() => setEditingStaff({ ...blank, id: `staff_${Date.now()}` })}
+            style={{ padding: '7px 13px', borderRadius: 10, border: 'none', background: '#52BAA8', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: FONT }}>
+            ＋ 追加
+          </button>
+        </div>
       </div>
+
       {staffList.map(s => (
-        <div key={s.id} style={{ background:C.card, borderRadius:13, padding:'11px 13px', marginBottom:8, border:`1.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:11 }}>
-          <div style={{ width:34, height:34, borderRadius:'50%', background:(s.color||C.primary)+'33', border:`2px solid ${s.color||C.primary}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:s.color||C.primary, flexShrink:0 }}>{(s.name||'?')[0]}</div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{s.name}</div>
-            {s.hiraganaName && <div style={{ fontSize:12, color:C.primary }}>{s.hiraganaName}先生</div>}
+        <div key={s.id} style={{ background: '#fff', borderRadius: 13, padding: '11px 13px', marginBottom: 8, border: '1.5px solid #EDE4D9', display: 'flex', alignItems: 'center', gap: 11 }}>
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: (s.color || '#52BAA8') + '33', border: `2px solid ${s.color || '#52BAA8'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: s.color || '#52BAA8', flexShrink: 0 }}>
+            {(s.name || '?')[0]}
           </div>
-          <button onClick={() => setEditingStaff(s)} style={{ padding:'5px 11px', borderRadius:8, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:12, color:C.sub, cursor:'pointer', fontFamily:FONT }}>編集</button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C2926' }}>{s.name}</div>
+            {s.hiraganaFirst && <div style={{ fontSize: 12, color: '#52BAA8' }}>{s.hiraganaFirst}先生</div>}
+          </div>
+          <button onClick={() => setEditingStaff(s)}
+            style={{ padding: '5px 11px', borderRadius: 8, border: '1.5px solid #EDE4D9', background: 'transparent', fontSize: 12, color: '#7A7068', cursor: 'pointer', fontFamily: FONT }}>
+            編集
+          </button>
         </div>
       ))}
+
       {editingStaff && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end', zIndex:300 }}>
-          <div style={{ background:C.card, borderRadius:'22px 22px 0 0', padding:'22px 18px 30px', width:'100%', maxHeight:'80vh', overflowY:'auto' }}>
-            <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:14 }}>職員情報の編集</div>
-            {[
-              { key:'hiraganaName', label:'ひらがなの名前', type:'text', ph:'やまだ はなこ' },
-              { key:'name', label:'フルネーム（漢字）※勤務表に表示', type:'text', ph:'山田 花子' },
-              { key:'email', label:'メールアドレス', type:'email', ph:'' },
-              { key:'birthday', label:'誕生日', type:'date', ph:'' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom:11 }}>
-                <div style={{ fontSize:13, color:C.sub, marginBottom:4 }}>{f.label}</div>
-                <input type={f.type} value={editingStaff[f.key]||''} placeholder={f.ph}
-                  onChange={e => setEditingStaff(p=>({...p,[f.key]:e.target.value}))}
-                  style={{ width:'100%', padding:'11px 13px', borderRadius:11, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:FONT, outline:'none', color:C.text }}
-                />
-              </div>
-            ))}
-            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-              {[true,false].map(v => (
-                <button key={String(v)} onClick={() => setEditingStaff(p=>({...p,active:v}))}
-                  style={{ flex:1, padding:'10px', borderRadius:10, border:`2px solid ${editingStaff.active===v?C.primary:C.border}`, background:editingStaff.active===v?C.primaryLight:'transparent', fontSize:13, fontWeight:600, color:editingStaff.active===v?C.primaryDark:C.sub, cursor:'pointer', fontFamily:FONT }}>
-                  {v?'在籍中':'退職済み'}
-                </button>
-              ))}
-            </div>
-            <div style={{ display:'flex', gap:9 }}>
-              <button onClick={() => setEditingStaff(null)} style={{ flex:1, padding:'12px', borderRadius:11, border:`2px solid ${C.border}`, background:'transparent', fontSize:14, fontWeight:600, color:C.sub, cursor:'pointer', fontFamily:FONT }}>キャンセル</button>
-              <button onClick={() => saveStaff(editingStaff)} disabled={saving} style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:C.primary, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>{saving?'保存中…':'保存する'}</button>
-            </div>
-          </div>
-        </div>
+        <StaffModal staff={editingStaff} setStaff={setEditingStaff} onSave={saveStaff} onClose={() => setEditingStaff(null)} saving={saving}/>
       )}
     </div>
   )
 }
 
+function StaffModal({ staff, setStaff, onSave, onClose, saving }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end', zIndex: 300 }}>
+      <div style={{ background: '#fff', borderRadius: '22px 22px 0 0', padding: '22px 18px 30px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: '#2C2926', marginBottom: 14 }}>職員情報の編集</div>
+        {[
+          { key: 'hiraganaFirst', label: '下の名前（ひらがな）　例：はなこ', ph: 'はなこ' },
+          { key: 'name',          label: 'フルネーム（漢字）', ph: '田中 花子' },
+          { key: 'email',         label: 'メールアドレス', ph: '', type: 'email' },
+          { key: 'birthday',      label: '誕生日', ph: '', type: 'date' },
+        ].map(f => (
+          <div key={f.key} style={{ marginBottom: 11 }}>
+            <div style={{ fontSize: 13, color: '#7A7068', marginBottom: 4 }}>{f.label}</div>
+            <input
+              type={f.type || 'text'}
+              autoComplete="off"
+              value={staff[f.key] || ''}
+              placeholder={f.ph}
+              onChange={e => setStaff(p => ({ ...p, [f.key]: e.target.value }))}
+              style={{ width: '100%', padding: '11px 13px', borderRadius: 11, border: '1.5px solid #EDE4D9', fontSize: 14, fontFamily: FONT, outline: 'none', color: '#2C2926' }}
+            />
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          {[true, false].map(v => (
+            <button key={String(v)} onClick={() => setStaff(p => ({ ...p, active: v }))}
+              style={{ flex: 1, padding: '10px', borderRadius: 10, border: `2px solid ${staff.active === v ? '#52BAA8' : '#EDE4D9'}`, background: staff.active === v ? '#E6F5F3' : 'transparent', fontSize: 13, fontWeight: 600, color: staff.active === v ? '#3A9A88' : '#7A7068', cursor: 'pointer', fontFamily: FONT }}>
+              {v ? '在籍中' : '退職済み'}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 9 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '12px', borderRadius: 11, border: '1.5px solid #EDE4D9', background: 'transparent', fontSize: 14, fontWeight: 600, color: '#7A7068', cursor: 'pointer', fontFamily: FONT }}>キャンセル</button>
+          <button onClick={() => onSave(staff)} disabled={saving} style={{ flex: 2, padding: '12px', borderRadius: 11, border: 'none', background: '#52BAA8', fontSize: 14, fontWeight: 700, color: '#fff', cursor: 'pointer', fontFamily: FONT }}>{saving ? '保存中…' : '保存する'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 児童管理 ────────────────────────────────────────────────
 function ChildrenTab({ children, editingChild, setEditingChild, saveChild, saving }) {
-  const blank = { name:'', birthday:'', emergency1_name:'', emergency1_tel:'', allergy:'', doctor:'', memo:'', active:true }
+  const blank = { name: '', birthday: '', emergency1_name: '', emergency1_tel: '', allergy: '', memo: '', active: true }
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-        <div style={{ fontSize:14, fontWeight:700, color:C.text }}>児童一覧</div>
-        <button onClick={() => setEditingChild(blank)} style={{ padding:'7px 13px', borderRadius:10, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>＋ 追加</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C2926' }}>児童一覧</div>
+        <button onClick={() => setEditingChild(blank)} style={{ padding: '7px 13px', borderRadius: 10, border: 'none', background: '#52BAA8', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: FONT }}>＋ 追加</button>
       </div>
       {children.map(c => (
-        <div key={c.id} style={{ background:C.card, borderRadius:13, padding:'11px 13px', marginBottom:8, border:`1.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:11 }}>
-          <div style={{ width:34, height:34, borderRadius:'50%', background:C.amberLight, border:`2px solid ${C.amber}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:'#B07800', flexShrink:0 }}>{(c.name||'?')[0]}</div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{c.name}</div>
-            {c.birthday && <div style={{ fontSize:11, color:C.sub }}>誕生日：{c.birthday}</div>}
+        <div key={c.id} style={{ background: '#fff', borderRadius: 13, padding: '11px 13px', marginBottom: 8, border: '1.5px solid #EDE4D9', display: 'flex', alignItems: 'center', gap: 11 }}>
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#FFF5E0', border: '2px solid #FFB94A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#B07800', flexShrink: 0 }}>
+            {(c.name || '?')[0]}
           </div>
-          <button onClick={() => setEditingChild(c)} style={{ padding:'5px 11px', borderRadius:8, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:12, color:C.sub, cursor:'pointer', fontFamily:FONT }}>編集</button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C2926' }}>{c.name}</div>
+            {c.birthday && <div style={{ fontSize: 11, color: '#7A7068' }}>誕生日：{c.birthday}</div>}
+          </div>
+          <button onClick={() => setEditingChild(c)} style={{ padding: '5px 11px', borderRadius: 8, border: '1.5px solid #EDE4D9', background: 'transparent', fontSize: 12, color: '#7A7068', cursor: 'pointer', fontFamily: FONT }}>編集</button>
         </div>
       ))}
       {editingChild && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end', zIndex:300 }}>
-          <div style={{ background:C.card, borderRadius:'22px 22px 0 0', padding:'22px 18px 30px', width:'100%', maxHeight:'85vh', overflowY:'auto' }}>
-            <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:14 }}>児童情報の編集</div>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end', zIndex: 300 }}>
+          <div style={{ background: '#fff', borderRadius: '22px 22px 0 0', padding: '22px 18px 30px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#2C2926', marginBottom: 14 }}>児童情報の編集</div>
             {[
-              { key:'name', label:'お名前', type:'text', ph:'例：さくら' },
-              { key:'birthday', label:'誕生日', type:'date', ph:'' },
-              { key:'emergency1_name', label:'緊急連絡先①（名前）', type:'text', ph:'例：田中 一郎（父）' },
-              { key:'emergency1_tel', label:'緊急連絡先①（電話）', type:'tel', ph:'090-0000-0000' },
-              { key:'emergency2_name', label:'緊急連絡先②（名前）', type:'text', ph:'' },
-              { key:'emergency2_tel', label:'緊急連絡先②（電話）', type:'tel', ph:'' },
-              { key:'allergy', label:'アレルギー・注意事項', type:'text', ph:'' },
-              { key:'doctor', label:'かかりつけ医', type:'text', ph:'' },
-              { key:'memo', label:'その他メモ', type:'text', ph:'' },
+              { key: 'name',            label: 'お名前', ph: '例：さくら' },
+              { key: 'birthday',        label: '誕生日', type: 'date', ph: '' },
+              { key: 'emergency1_name', label: '緊急連絡先①（名前）', ph: '例：田中 一郎（父）' },
+              { key: 'emergency1_tel',  label: '緊急連絡先①（電話）', type: 'tel', ph: '090-0000-0000' },
+              { key: 'allergy',         label: 'アレルギー・注意事項', ph: '' },
+              { key: 'memo',            label: 'その他メモ', ph: '' },
             ].map(f => (
-              <div key={f.key} style={{ marginBottom:11 }}>
-                <div style={{ fontSize:13, color:C.sub, marginBottom:4 }}>{f.label}</div>
-                <input type={f.type} value={editingChild[f.key]||''} placeholder={f.ph}
-                  onChange={e => setEditingChild(p=>({...p,[f.key]:e.target.value}))}
-                  style={{ width:'100%', padding:'11px 13px', borderRadius:11, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:FONT, outline:'none', color:C.text }}
+              <div key={f.key} style={{ marginBottom: 11 }}>
+                <div style={{ fontSize: 13, color: '#7A7068', marginBottom: 4 }}>{f.label}</div>
+                <input type={f.type || 'text'} autoComplete="off" value={editingChild[f.key] || ''} placeholder={f.ph}
+                  onChange={e => setEditingChild(p => ({ ...p, [f.key]: e.target.value }))}
+                  style={{ width: '100%', padding: '11px 13px', borderRadius: 11, border: '1.5px solid #EDE4D9', fontSize: 14, fontFamily: FONT, outline: 'none', color: '#2C2926' }}
                 />
               </div>
             ))}
-            <div style={{ display:'flex', gap:9, marginTop:4 }}>
-              <button onClick={() => setEditingChild(null)} style={{ flex:1, padding:'12px', borderRadius:11, border:`2px solid ${C.border}`, background:'transparent', fontSize:14, fontWeight:600, color:C.sub, cursor:'pointer', fontFamily:FONT }}>キャンセル</button>
-              <button onClick={() => saveChild(editingChild)} disabled={saving} style={{ flex:2, padding:'12px', borderRadius:11, border:'none', background:C.primary, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>{saving?'保存中…':'保存する'}</button>
+            <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
+              <button onClick={() => setEditingChild(null)} style={{ flex: 1, padding: '12px', borderRadius: 11, border: '1.5px solid #EDE4D9', background: 'transparent', fontSize: 14, fontWeight: 600, color: '#7A7068', cursor: 'pointer', fontFamily: FONT }}>キャンセル</button>
+              <button onClick={() => saveChild(editingChild)} disabled={saving} style={{ flex: 2, padding: '12px', borderRadius: 11, border: 'none', background: '#52BAA8', fontSize: 14, fontWeight: 700, color: '#fff', cursor: 'pointer', fontFamily: FONT }}>{saving ? '保存中…' : '保存する'}</button>
             </div>
           </div>
         </div>
@@ -278,28 +447,54 @@ function ChildrenTab({ children, editingChild, setEditingChild, saveChild, savin
   )
 }
 
+// ── 権限設定 ────────────────────────────────────────────────
 function RolesTab({ staffList, updateRole, devMode, role, ROLES, ROLE_LABELS, ROLE_COLORS }) {
-  const opts = devMode ? Object.keys(ROLE_LABELS) : [ROLES.STAFF, ROLES.EDITOR, ROLES.SUB_ADMIN, ROLES.ADMIN]
+  const canSetDeveloper = devMode || role === 'developer'
+  const availableRoles  = canSetDeveloper
+    ? ['developer', 'admin', 'sub_admin', 'editor', 'staff']
+    : ['admin', 'sub_admin', 'editor', 'staff']
+
   return (
     <div>
-      <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:4 }}>権限の設定</div>
-      {devMode && <div style={{ background:C.coralLight, borderRadius:11, padding:'9px 13px', marginBottom:13, fontSize:13, color:'#CC5040' }}>⚠️ 開発者モード中（残り時間で自動終了）</div>}
+      <div style={{ fontSize: 14, fontWeight: 700, color: '#2C2926', marginBottom: 6 }}>権限の設定</div>
+      {devMode && (
+        <div style={{ background: '#FFECEA', borderRadius: 11, padding: '9px 13px', marginBottom: 14, fontSize: 13, color: '#CC5040' }}>
+          ⚠️ 開発者モード中（残り時間で自動終了）
+        </div>
+      )}
+      <div style={{ background: '#FFF5E0', borderRadius: 11, padding: '9px 13px', marginBottom: 14, fontSize: 12, color: '#7A5000', lineHeight: 1.6 }}>
+        ※ 権限変更は即座にFirestoreに保存されます。<br/>
+        変更後はページをリロードしなくても反映されます。
+      </div>
+
       {staffList.map(s => {
         const rc = ROLE_COLORS[s.role] || ROLE_COLORS.staff
-        const opts2 = devMode ? Object.keys(ROLE_LABELS) : [ROLES.STAFF, ROLES.EDITOR, ROLES.SUB_ADMIN, ROLES.ADMIN]
         return (
-          <div key={s.id} style={{ background:C.card, borderRadius:13, padding:'11px 13px', marginBottom:8, border:`1.5px solid ${C.border}` }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:9 }}>
-              <div style={{ width:30, height:30, borderRadius:'50%', background:(s.color||C.primary)+'33', border:`2px solid ${s.color||C.primary}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:s.color||C.primary }}>{(s.name||'?')[0]}</div>
+          <div key={s.id} style={{ background: '#fff', borderRadius: 13, padding: '12px 14px', marginBottom: 8, border: '1.5px solid #EDE4D9' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ width: 30, height: 30, borderRadius: '50%', background: (s.color || '#52BAA8') + '33', border: `2px solid ${s.color || '#52BAA8'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: s.color || '#52BAA8' }}>
+                {(s.name || '?')[0]}
+              </div>
               <div>
-                <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{s.name}</div>
-                <span style={{ background:rc.bg, color:rc.c, borderRadius:99, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{ROLE_LABELS[s.role]||'一般職員'}</span>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#2C2926' }}>{s.name}</div>
+                <span style={{ background: rc.bg, color: rc.c, borderRadius: 99, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+                  {ROLE_LABELS[s.role] || '一般職員'}
+                </span>
               </div>
             </div>
-            <select value={s.role||ROLES.STAFF} onChange={e => updateRole(s.id, e.target.value)}
-              style={{ width:'100%', padding:'10px 12px', borderRadius:10, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:FONT, background:C.bg, color:C.text, outline:'none' }}>
-              {opts2.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-            </select>
+            {/* 権限選択ボタン（ドロップダウンを避けてボタン式に） */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {availableRoles.map(r => {
+                const rrc = ROLE_COLORS[r] || ROLE_COLORS.staff
+                const on  = (s.role || 'staff') === r
+                return (
+                  <button key={r} onClick={() => updateRole(s.id, r)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: `1.5px solid ${on ? rrc.c : '#EDE4D9'}`, background: on ? rrc.bg : 'transparent', fontSize: 12, fontWeight: on ? 700 : 400, color: on ? rrc.c : '#7A7068', cursor: 'pointer', fontFamily: FONT, transition: 'all .15s' }}>
+                    {ROLE_LABELS[r]}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )
       })}
@@ -307,25 +502,70 @@ function RolesTab({ staffList, updateRole, devMode, role, ROLES, ROLE_LABELS, RO
   )
 }
 
-function DevTab({ devMode, devSecsLeft, pwInput, setPwInput, pwError, verifyDev, clearDevMode }) {
-  const m = Math.floor(devSecsLeft/60), s = devSecsLeft%60
+// ── これまでの記録 ─────────────────────────────────────────
+function RecordsTab({ spreadsheetId }) {
+  const url = spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}` : null
+  return (
+    <div style={{ background: '#fff', borderRadius: 18, padding: 16, border: '1.5px solid #EDE4D9' }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#2C2926', marginBottom: 8 }}>📊 これまでの記録</div>
+      <div style={{ fontSize: 13, color: '#7A7068', lineHeight: 1.7, marginBottom: 12 }}>
+        毎日17:00に支援記録がGoogleスプレッドシートへ自動保存されます。2026年4月〜2035年12月の10年分。
+      </div>
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer"
+          style={{ display: 'block', padding: '13px', borderRadius: 12, border: 'none', background: '#52BAA8', color: '#fff', fontSize: 14, fontWeight: 700, textAlign: 'center', textDecoration: 'none', fontFamily: FONT }}>
+          📊 Googleスプレッドシートを開く
+        </a>
+      ) : (
+        <div style={{ background: '#FFF5E0', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#7A5000' }}>
+          .env の VITE_SPREADSHEET_ID を設定してください
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 開発者 ─────────────────────────────────────────────────
+function DevTab({ devMode, devSecsLeft, pwInput, setPwInput, pwError, verifyDev, clearDevMode, addTestStaff }) {
+  const m = Math.floor(devSecsLeft / 60)
+  const s = devSecsLeft % 60
+
   return devMode ? (
-    <div style={{ background:C.coralLight, borderRadius:18, padding:20, border:`1.5px solid ${C.coral}44` }}>
-      <div style={{ fontSize:16, fontWeight:800, color:'#CC5040', marginBottom:8 }}>⚠️ 開発者モード 有効中</div>
-      <div style={{ fontSize:32, fontWeight:800, color:'#CC5040', textAlign:'center', marginBottom:12 }}>{m}:{String(s).padStart(2,'0')}</div>
-      <div style={{ fontSize:14, color:'#CC5040', marginBottom:16 }}>残り時間で自動的に終了します</div>
-      <button onClick={clearDevMode} style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', background:'#CC5040', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>今すぐ終了する</button>
+    <div style={{ background: '#FFECEA', borderRadius: 18, padding: 20, border: '1.5px solid #FF8A7544' }}>
+      <div style={{ fontSize: 16, fontWeight: 800, color: '#CC5040', marginBottom: 8 }}>⚠️ 開発者モード 有効中</div>
+      <div style={{ fontSize: 32, fontWeight: 800, color: '#CC5040', textAlign: 'center', marginBottom: 12 }}>{m}:{String(s).padStart(2,'0')}</div>
+      <div style={{ fontSize: 13, color: '#CC5040', marginBottom: 16 }}>残り時間で自動的に終了します</div>
+      <button onClick={addTestStaff}
+        style={{ width: '100%', padding: '12px', borderRadius: 12, border: '1.5px solid #9E9E9E', background: '#F5F5F5', fontSize: 14, fontWeight: 700, color: '#444', cursor: 'pointer', fontFamily: FONT, marginBottom: 10 }}>
+        ＋「テスト 職員」をFirestoreに追加する
+      </button>
+      <button onClick={clearDevMode}
+        style={{ width: '100%', padding: '13px', borderRadius: 12, border: 'none', background: '#CC5040', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: FONT }}>
+        今すぐ終了する
+      </button>
     </div>
   ) : (
-    <div style={{ background:C.card, borderRadius:18, padding:20, border:`1.5px solid ${C.border}` }}>
-      <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:4 }}>🔐 開発者専用</div>
-      <div style={{ fontSize:13, color:C.sub, marginBottom:14, lineHeight:1.6 }}>パスワードを入力すると権限の付与・変更ができます。認証後は5分で自動終了します。</div>
-      {pwError && <div style={{ background:C.coralLight, borderRadius:9, padding:'8px 12px', marginBottom:11, fontSize:13, color:C.coral }}>{pwError}</div>}
-      <input type="password" value={pwInput} onChange={e=>setPwInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&verifyDev()}
+    <div style={{ background: '#fff', borderRadius: 18, padding: 20, border: '1.5px solid #EDE4D9' }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#2C2926', marginBottom: 4 }}>🔐 開発者専用</div>
+      <div style={{ fontSize: 13, color: '#7A7068', marginBottom: 14, lineHeight: 1.6 }}>
+        パスワードを入力すると権限の付与・変更ができます。認証後は5分で自動終了します。
+      </div>
+      {pwError && (
+        <div style={{ background: '#FFECEA', borderRadius: 9, padding: '8px 12px', marginBottom: 11, fontSize: 13, color: '#CC5040' }}>{pwError}</div>
+      )}
+      <input
+        type="password"
+        autoComplete="new-password"
+        value={pwInput}
+        onChange={e => setPwInput(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && verifyDev()}
         placeholder="開発者パスワード"
-        style={{ width:'100%', padding:'13px', borderRadius:11, border:`1.5px solid ${C.border}`, fontSize:15, fontFamily:FONT, outline:'none', marginBottom:11, color:C.text }}
+        style={{ width: '100%', padding: '13px', borderRadius: 11, border: '1.5px solid #EDE4D9', fontSize: 15, fontFamily: FONT, outline: 'none', marginBottom: 11, color: '#2C2926' }}
       />
-      <button onClick={verifyDev} style={{ width:'100%', padding:'13px', borderRadius:11, border:'none', background:C.primaryDark, color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>認証する</button>
+      <button onClick={verifyDev}
+        style={{ width: '100%', padding: '13px', borderRadius: 11, border: 'none', background: '#3A9A88', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: FONT }}>
+        認証する
+      </button>
     </div>
   )
 }

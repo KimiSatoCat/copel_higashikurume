@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { doc, onSnapshot, setDoc, getDoc, collection, getDocs } from 'firebase/firestore'
-import { db, FACILITY_ID } from '../firebase'
+import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth'
+import { db, FACILITY_ID, auth, googleProvider } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT, SHIFT, DOW_JA } from '../theme'
 
-const SHIFT_OPTS = ['in', 'late', 'ext', 'off']
+const SHIFT_OPTS = ['in','late','ext','off']
 
-// 祝日セット（2026〜2035）
 const HOLIDAYS = new Set([
   '2026-01-01','2026-01-12','2026-02-11','2026-02-23','2026-03-20',
   '2026-04-29','2026-05-03','2026-05-04','2026-05-05','2026-05-06',
@@ -14,16 +14,14 @@ const HOLIDAYS = new Set([
   '2026-10-12','2026-11-03','2026-11-23',
   '2027-01-01','2027-01-11','2027-02-11','2027-02-23','2027-03-21',
   '2027-04-29','2027-05-03','2027-05-04','2027-05-05',
-  '2027-07-19','2027-08-11','2027-09-20','2027-09-23','2027-10-11',
-  '2027-11-03','2027-11-23',
+  '2027-07-19','2027-08-11','2027-09-20','2027-09-23',
+  '2027-10-11','2027-11-03','2027-11-23',
   '2028-01-01','2028-01-10','2028-02-11','2028-02-23','2028-03-20',
   '2028-04-29','2028-05-03','2028-05-04','2028-05-05',
-  '2028-07-17','2028-08-11','2028-09-18','2028-09-22','2028-10-09',
-  '2028-11-03','2028-11-23',
+  '2028-07-17','2028-08-11','2028-09-18','2028-09-22',
+  '2028-10-09','2028-11-03','2028-11-23',
   '2029-01-01','2029-01-08','2029-02-11','2029-02-23','2029-03-20',
   '2029-04-29','2029-05-03','2029-05-04','2029-05-05',
-  '2030-01-01','2030-01-14','2030-02-11','2030-02-23','2030-03-20',
-  '2030-04-29','2030-05-03','2030-05-04','2030-05-05',
 ])
 
 function toDateStr(y, m, d) {
@@ -38,36 +36,27 @@ function rowBg(y, m, d) {
   return null
 }
 
-// Google Calendar の色ID（自分のシフト種別に合わせる）
-const GCAL_COLOR = { in: '2', late: '5', ext: '6', off: null }
-// 色ID: 2=sage(緑), 5=banana(黄), 6=tangerine(橙)
+const GCAL_COLOR = { in:'2', late:'5', ext:'6' }
 
 export default function Calendar() {
   const { can, getGoogleToken, user } = useAuth()
   const today = new Date()
 
-  const [year,     setYear]     = useState(today.getFullYear())
-  const [month,    setMonth]    = useState(today.getMonth() + 1)
-  const [staffList,setStaffList]= useState([])
-  const [schedule, setSchedule] = useState({ shifts:{}, events:{} })
-  const [editMode, setEditMode] = useState(false)
-  const [modalDay, setModalDay] = useState(null)
-  const [eventInput,setEventInput] = useState('')
-  const [bdayMap,  setBdayMap]  = useState({})
-
-  // カレンダー同期の状態
-  const [syncState, setSyncState] = useState({
-    status: 'idle',   // idle | loading | success | error
-    message: '',
-    details: '',
-  })
+  const [year,      setYear]      = useState(today.getFullYear())
+  const [month,     setMonth]     = useState(today.getMonth() + 1)
+  const [staffList, setStaffList] = useState([])
+  const [schedule,  setSchedule]  = useState({ shifts:{}, events:{} })
+  const [editMode,  setEditMode]  = useState(false)
+  const [modalDay,  setModalDay]  = useState(null)
+  const [eventInput,setEventInput]= useState('')
+  const [bdayMap,   setBdayMap]   = useState({})
+  const [syncState, setSyncState] = useState({ status:'idle', message:'' })
   const unsubRef = useRef(null)
 
   const ym          = `${year}-${String(month).padStart(2,'0')}`
   const daysInMonth = new Date(year, month, 0).getDate()
   const days        = Array.from({ length: daysInMonth }, (_, i) => i + 1)
 
-  // 月が変わるたびにデータを再取得
   useEffect(() => {
     if (unsubRef.current) unsubRef.current()
 
@@ -75,7 +64,6 @@ export default function Calendar() {
       const list = snap.docs.filter(d => d.data().active).map(d => ({ id:d.id, ...d.data() }))
       setStaffList(list)
 
-      // 職員の誕生日マップを構築（この月のみ）
       const map = {}
       list.forEach(s => {
         if (!s.birthday) return
@@ -83,20 +71,17 @@ export default function Calendar() {
         const bMonth = parseInt(parts[1])
         const bDay   = parseInt(parts[2])
         if (bMonth === month) {
-          const displayName = s.hiraganaName
-            ? s.hiraganaName.split(' ')[0]
-            : (s.name || '').split(' ')[0]
-          ;(map[bDay] = map[bDay] || []).push({ name: displayName, type: 'staff' })
+          const name = s.hiraganaFirst || s.hiraganaName?.split(' ')[0] || s.name?.split(' ')[0] || ''
+          ;(map[bDay] = map[bDay] || []).push({ name, type:'staff' })
         }
       })
       setBdayMap(map)
     })
 
-    const ref = doc(db, 'facilities', FACILITY_ID, 'schedules', ym)
+    const ref = doc(db,'facilities',FACILITY_ID,'schedules',ym)
     unsubRef.current = onSnapshot(ref, snap => {
       setSchedule(snap.exists() ? snap.data() : { shifts:{}, events:{} })
     })
-
     return () => { if (unsubRef.current) unsubRef.current() }
   }, [ym, month, year])
 
@@ -104,10 +89,9 @@ export default function Calendar() {
   const nextMonth = () => { if(month===12){setYear(y=>y+1);setMonth(1)}else setMonth(m=>m+1) }
   const goToday   = () => { setYear(today.getFullYear()); setMonth(today.getMonth()+1) }
 
-  // シフト更新（権限者のみ）
   const updateShift = async (staffId, day, val) => {
     if (!can.editSchedule()) return
-    const ref  = doc(db, 'facilities', FACILITY_ID, 'schedules', ym)
+    const ref  = doc(db,'facilities',FACILITY_ID,'schedules',ym)
     const snap = await getDoc(ref)
     const data = snap.exists() ? snap.data() : { shifts:{}, events:{} }
     if (!data.shifts) data.shifts = {}
@@ -116,83 +100,56 @@ export default function Calendar() {
     await setDoc(ref, data, { merge: true })
   }
 
-  // イベント保存
   const saveEvent = async () => {
     if (!modalDay) return
-    const val = eventInput.trim()
     await setDoc(
-      doc(db, 'facilities', FACILITY_ID, 'schedules', ym),
-      { events: { [modalDay]: val || null } },
+      doc(db,'facilities',FACILITY_ID,'schedules',ym),
+      { events: { [modalDay]: eventInput.trim() || null } },
       { merge: true }
     )
     setModalDay(null)
     setEventInput('')
   }
 
-  // ─── Google カレンダー連携（メイン処理） ──────────────────────
+  // ─── Google カレンダー連携 ───────────────────────────────
   const syncToGoogleCalendar = async () => {
-    setSyncState({ status:'loading', message:'Googleカレンダーに連携中…', details:'' })
-
+    setSyncState({ status:'loading', message:'Googleカレンダーに連携中…' })
     try {
-      // ① アクセストークンを取得（キャッシュ済みなら再取得しない）
       const accessToken = await getGoogleToken()
+      const myUid       = user?.uid
+      const myShifts    = (schedule.shifts || {})[myUid] || {}
+      const entries     = Object.entries(myShifts).filter(([, t]) => t !== 'off')
 
-      // ② 自分のシフトを取得
-      const myUid    = user?.uid
-      const myShifts = (schedule.shifts || {})[myUid] || {}
-
-      if (Object.keys(myShifts).length === 0) {
-        setSyncState({ status:'error', message:'このシフト表にあなたの勤務が登録されていません', details:'' })
-        setTimeout(() => setSyncState({ status:'idle', message:'', details:'' }), 4000)
+      if (entries.length === 0) {
+        setSyncState({ status:'error', message:'このシフト表にあなたの勤務が登録されていません' })
+        setTimeout(() => setSyncState({ status:'idle', message:'' }), 4000)
         return
       }
 
-      // ③ 追加するイベントを作成
-      const entries = Object.entries(myShifts).filter(([, t]) => t !== 'off')
       let created = 0, failed = 0
-
-      const staffName = schedule.shifts?.[myUid]
-        ? (staffList.find(s => s.id === myUid)?.name || 'スタッフ')
-        : 'スタッフ'
-
       for (const [dayStr, type] of entries) {
         const d        = parseInt(dayStr)
-        const dateISO  = toDateStr(year, month, d)
         const label    = type==='in'?'出勤' : type==='ext'?'外勤' : type==='late'?'遅刻' : '勤務'
-        const colorId  = GCAL_COLOR[type]
-
-        const event = {
-          summary:     `【コペルプラス】${label}`,
-          description: `コペルプラス 東久留米教室 ${label}\n担当: ${staffName}`,
-          start:       { date: dateISO },
-          end:         { date: dateISO },
-          ...(colorId ? { colorId } : {}),
+        const event    = {
+          summary:  `【コペルプラス】${label}`,
+          description: `コペルプラス 東久留米教室 ${label}`,
+          start: { date: toDateStr(year, month, d) },
+          end:   { date: toDateStr(year, month, d) },
+          ...(GCAL_COLOR[type] ? { colorId: GCAL_COLOR[type] } : {}),
         }
-
-        try {
-          const res = await fetch(
-            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
-            {
-              method:  'POST',
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type':  'application/json',
-              },
-              body: JSON.stringify(event),
-            }
-          )
-
-          if (res.ok) {
-            created++
-          } else {
-            const errData = await res.json()
-            console.warn('[CalendarSync] イベント追加失敗:', dateISO, errData)
-            // 401 = トークン期限切れ → 上位で再試行させる
-            if (res.status === 401) throw new Error('TOKEN_EXPIRED')
-            failed++
+        const res = await fetch(
+          'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+          {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body:    JSON.stringify(event),
           }
-        } catch (innerErr) {
-          if (innerErr.message === 'TOKEN_EXPIRED') throw innerErr
+        )
+        if (res.ok) created++
+        else {
+          const err = await res.json().catch(() => ({}))
+          console.warn('[GCal]', dayStr, err?.error?.message)
+          if (res.status === 401) throw new Error('TOKEN_EXPIRED')
           failed++
         }
       }
@@ -200,19 +157,105 @@ export default function Calendar() {
       const msg = failed === 0
         ? `✅ ${created}件をGoogleカレンダーに追加しました！`
         : `⚠️ ${created}件追加，${failed}件失敗しました`
-
-      setSyncState({ status: failed === 0 ? 'success' : 'error', message: msg, details: '' })
+      setSyncState({ status: failed===0 ? 'success' : 'error', message: msg })
     } catch (err) {
-      console.error('[CalendarSync] エラー:', err)
-      setSyncState({
-        status:  'error',
-        message: 'Googleカレンダーへの連携に失敗しました',
-        details: err.message || '',
-      })
+      console.error('[GCal]', err)
+      setSyncState({ status:'error', message: `連携に失敗しました: ${err.message}` })
     }
+    setTimeout(() => setSyncState({ status:'idle', message:'' }), 5000)
+  }
 
-    // 5秒後にリセット
-    setTimeout(() => setSyncState({ status:'idle', message:'', details:'' }), 5000)
+  // ─── PDF ダウンロード ───────────────────────────────────
+  const downloadPDF = () => {
+    const shifts = schedule.shifts || {}
+    const events = schedule.events || {}
+
+    // 印刷用HTMLを生成
+    const rows = days.map(d => {
+      const dow    = new Date(year, month-1, d).getDay()
+      const isHol  = isHoliday(year, month, d)
+      const bg     = rowBg(year, month, d)
+      const bgCSS  = bg ? `background-color:${bg};` : ''
+      const dowStr = DOW_JA[dow]
+      const ev     = events[d] || ''
+      const cells  = staffList.map(s => {
+        const type = shifts[s.id]?.[d] || 'off'
+        const cfg  = SHIFT[type]
+        return `<td style="text-align:center;padding:3px 6px;background-color:${cfg.bg};color:${cfg.color};font-weight:600;">${cfg.short}</td>`
+      }).join('')
+      return `<tr style="${bgCSS}">
+        <td style="text-align:center;padding:3px 6px;font-weight:${d===today.getDate()&&month===today.getMonth()+1&&year===today.getFullYear()?700:400}">${d}</td>
+        <td style="text-align:center;padding:3px 6px;color:${dow===0||isHol?'#CC5040':dow===6?'#1565C0':dow===3?'#7B6000':'#2C2926'}">${dowStr}</td>
+        <td style="padding:3px 6px;font-size:11px;">${ev}</td>
+        ${cells}
+      </tr>`
+    }).join('')
+
+    const headerCells = staffList.map(s => {
+      const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : (s.name || '').split(' ')[1] || s.name || ''
+      return `<th style="padding:4px 6px;font-size:11px;white-space:nowrap;">${name}</th>`
+    }).join('')
+
+    const html = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"/>
+<title>コペルプラス 東久留米 ${year}年${month}月 シフト表</title>
+<style>
+  body { font-family: 'M PLUS Rounded 1c', 'Meiryo', sans-serif; font-size: 12px; margin: 10px; }
+  h2 { font-size: 16px; margin-bottom: 10px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #CCC; }
+  thead tr { background: #52BAA8; color: #fff; }
+  .legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 11px; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+  @media print {
+    body { margin: 5mm; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+<h2>コペルプラス 東久留米教室　${year}年${month}月　シフト表</h2>
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#52BAA8"></div><span>出勤</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFB94A"></div><span>遅刻</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FF8A75"></div><span>外勤</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#C8C0B8"></div><span>お休み</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFECEA"></div><span>日曜・祝日</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#E3F2FD"></div><span>土曜</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFFDE7"></div><span>水曜</span></div>
+</div>
+<button class="no-print" onclick="window.print()" style="margin-bottom:12px;padding:8px 20px;background:#52BAA8;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">🖨 印刷する / PDFで保存</button>
+<table>
+<thead>
+<tr>
+  <th style="padding:4px 6px;">日</th>
+  <th style="padding:4px 6px;">曜</th>
+  <th style="padding:4px 6px;">イベント</th>
+  ${headerCells}
+</tr>
+</thead>
+<tbody>
+${rows}
+</tbody>
+</table>
+<p style="margin-top:12px;font-size:10px;color:#888;">作成日時：${new Date().toLocaleString('ja-JP')}</p>
+</body>
+</html>`
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const url  = URL.createObjectURL(blob)
+    const win  = window.open(url, '_blank')
+    if (!win) {
+      // ポップアップブロックされた場合はダウンロード
+      const a = document.createElement('a')
+      a.href  = url
+      a.download = `copelplus_${year}年${month}月_シフト表.html`
+      a.click()
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
   }
 
   const events = schedule.events || {}
@@ -236,7 +279,7 @@ export default function Calendar() {
           )}
         </div>
         {/* 凡例 */}
-        <div style={{ display:'flex', gap:7, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
           {Object.entries(SHIFT).map(([k,v]) => (
             <div key={k} style={{ display:'flex', alignItems:'center', gap:3 }}>
               <div style={{ width:9, height:9, borderRadius:2, background:v.dot }}/>
@@ -263,8 +306,7 @@ export default function Calendar() {
             {days.map(d => (
               <div key={d} style={{ width:36, flexShrink:0, marginRight:2, height:14 }}>
                 {events[d] && (
-                  <div
-                    style={{ background:C.amberLight, borderRadius:3, padding:'1px 2px', fontSize:8, color:'#7A5000', overflow:'hidden', whiteSpace:'nowrap', maxWidth:34, cursor:can.editSchedule()?'pointer':'default' }}
+                  <div style={{ background:C.amberLight, borderRadius:3, padding:'1px 2px', fontSize:8, color:'#7A5000', overflow:'hidden', whiteSpace:'nowrap', maxWidth:34, cursor:can.editSchedule()?'pointer':'default' }}
                     onClick={() => can.editSchedule() && (setModalDay(d), setEventInput(events[d]||''))}
                     title={events[d]}>
                     {events[d].slice(0,5)}
@@ -305,7 +347,7 @@ export default function Calendar() {
                   {(s.name||'?')[0]}
                 </div>
                 <span style={{ fontSize:9, fontWeight:500, color:C.text, overflow:'hidden', maxWidth:28, lineHeight:1.2 }}>
-                  {(s.hiraganaName||s.name||'').split(' ')[1] || (s.name||'').slice(0,3)}
+                  {s.hiraganaFirst || (s.name||'').split(' ')[1] || (s.name||'').slice(0,3)}
                 </span>
               </div>
               {days.map(d => {
@@ -332,38 +374,34 @@ export default function Calendar() {
         </div>
       </div>
 
-      {/* ─── Google カレンダー連携ボタン ─── */}
-      <div style={{ padding:'10px 12px', background:C.card, borderTop:`1px solid ${C.divider}`, flexShrink:0 }}>
-        {syncState.status === 'idle' && (
+      {/* ─── 下部ボタン（カレンダー連携 ＋ PDF保存） ─── */}
+      <div style={{ padding:'10px 12px', background:C.card, borderTop:`1px solid ${C.divider}`, flexShrink:0, display:'flex', flexDirection:'column', gap:8 }}>
+
+        {/* Google カレンダー連携 */}
+        {syncState.status === 'idle' ? (
           <button onClick={syncToGoogleCalendar}
             style={{ width:'100%', padding:'12px', borderRadius:13, border:`1.5px solid ${C.border}`, background:C.card, display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:C.text, cursor:'pointer', fontFamily:FONT }}>
-            <GoogleIcon size={16}/>
-            自分の勤務を Googleカレンダーに連携する
+            <GoogleIcon size={16}/> 自分の勤務を Googleカレンダーに連携する
           </button>
-        )}
-
-        {syncState.status === 'loading' && (
+        ) : syncState.status === 'loading' ? (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'12px', borderRadius:13, background:C.amberLight }}>
             <div style={{ width:16, height:16, borderRadius:'50%', border:`2px solid ${C.amberLight}`, borderTopColor:C.amber, animation:'spin .7s linear infinite' }}/>
             <span style={{ fontSize:13, fontWeight:600, color:'#7A5000' }}>{syncState.message}</span>
           </div>
-        )}
-
-        {syncState.status === 'success' && (
-          <div style={{ padding:'12px', borderRadius:13, background:C.primaryLight, textAlign:'center' }}>
-            <div style={{ fontSize:13, fontWeight:700, color:C.primaryDark }}>{syncState.message}</div>
+        ) : (
+          <div style={{ padding:'12px', borderRadius:13, background:syncState.status==='success'?C.primaryLight:C.coralLight, textAlign:'center' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:syncState.status==='success'?C.primaryDark:C.coral }}>{syncState.message}</div>
           </div>
         )}
 
-        {syncState.status === 'error' && (
-          <div style={{ padding:'12px', borderRadius:13, background:C.coralLight }}>
-            <div style={{ fontSize:13, fontWeight:700, color:C.coral }}>{syncState.message}</div>
-            {syncState.details && <div style={{ fontSize:11, color:C.coral, marginTop:4, opacity:.8 }}>{syncState.details}</div>}
-          </div>
-        )}
+        {/* PDF ダウンロード */}
+        <button onClick={downloadPDF}
+          style={{ width:'100%', padding:'12px', borderRadius:13, border:`1.5px solid ${C.primary}44`, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:C.primaryDark, cursor:'pointer', fontFamily:FONT }}>
+          📄 PDFとして保存する（印刷用）
+        </button>
 
-        <div style={{ fontSize:10, color:C.muted, textAlign:'center', marginTop:5 }}>
-          ※ 自分の出勤予定のみが追加されます（他の職員のシフトは追加されません）
+        <div style={{ fontSize:10, color:C.muted, textAlign:'center' }}>
+          ※ カレンダー連携：自分の勤務のみ追加されます　　※ PDF：ブラウザの印刷画面が開きます
         </div>
       </div>
 
@@ -380,7 +418,10 @@ export default function Calendar() {
                 🎂 {bdayMap[modalDay].map(b=>`${b.name}${b.type==='child'?'ちゃん':'先生'}`).join('・')} の誕生日です
               </div>
             )}
-            <input value={eventInput} onChange={e=>setEventInput(e.target.value)}
+            <input
+              autoComplete="off"
+              value={eventInput}
+              onChange={e => setEventInput(e.target.value)}
               placeholder="イベント名（例：研修・誕生日会・教材整理）"
               onKeyDown={e => e.key==='Enter' && saveEvent()}
               style={{ width:'100%', padding:'13px', borderRadius:11, border:`1.5px solid ${C.border}`, fontSize:15, fontFamily:FONT, outline:'none', marginBottom:12, boxSizing:'border-box', color:C.text }}
@@ -393,9 +434,7 @@ export default function Calendar() {
         </div>
       )}
 
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
