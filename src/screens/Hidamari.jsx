@@ -4,6 +4,26 @@ import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
 
+// ★ Claude APIはVercel Serverless Function経由で呼び出す（CORS・セキュリティ対策）
+async function callClaude({ system, messages, max_tokens = 1000 }) {
+  const res = await fetch('/api/claude-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens,
+      system,
+      messages,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error?.message || `API error ${res.status}`)
+  }
+  const data = await res.json()
+  return data.content?.find(b => b.type === 'text')?.text || ''
+}
+
 const SYSTEM_PROMPT = `あなたは「こころのひだまり」というAIカウンセラーです。コペルプラス 東久留米教室で働く職員をやさしく温かく支える存在です。
 
 以下の順番で、500〜600字を目安に返答してください：
@@ -33,23 +53,26 @@ const SUMMARY_PROMPT = `以下は職員とAIカウンセラーの会話内容で
 
 export default function Hidamari() {
   const { user, profile } = useAuth()
-  const today    = new Date().toISOString().slice(0,10)
-  const [msgs,   setMsgs]   = useState([
+  const today = new Date().toISOString().slice(0, 10)
+
+  const [msgs,    setMsgs]    = useState([
     { role:'ai', text:'こんにちは 🌤️\n\nここは、あなただけの安心できる場所です。\n今日、こころにたまっていることを、なんでも話してくださいね。\n\nどんな気持ちも、ちゃんと受け止めます。' }
   ])
-  const [input,  setInput]  = useState('')
-  const [loading,setLoading] = useState(false)
-  const [used,   setUsed]   = useState(false)
-  const [emailSent, setEmailSent] = useState(false)
+  const [input,   setInput]   = useState('')
+  const [loading, setLoading] = useState(false)
+  const [used,    setUsed]    = useState(false)
   const bottomRef = useRef()
 
   useEffect(() => {
     if (!user) return
-    const ref = doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today)
-    getDoc(ref).then(snap => { if (snap.exists()) setUsed(true) })
+    getDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
+      .then(snap => { if (snap.exists()) setUsed(true) })
+      .catch(() => {})
   }, [user, today])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:'smooth' }) }, [msgs, loading])
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [msgs, loading])
 
   const send = async () => {
     const text = input.trim()
@@ -60,117 +83,93 @@ export default function Hidamari() {
     setLoading(true)
 
     try {
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+      // ① 寄り添い返答を生成
       const history = newMsgs.slice(1).map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.text
+        role:    m.role === 'user' ? 'user' : 'assistant',
+        content: m.text,
       }))
-
-      // ① Claudeが共感・寄り添いの返答を生成
-      const res  = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01' },
-        body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:1000, system:SYSTEM_PROMPT, messages:history })
-      })
-      const data  = await res.json()
-      const reply = data.content?.find(b=>b.type==='text')?.text || 'うまく受け取れませんでした。もう一度お話しください。'
-
-      const finalMsgs = [...newMsgs, { role:'ai', text:reply }]
+      const reply = await callClaude({ system: SYSTEM_PROMPT, messages: history })
+      const finalMsgs = [...newMsgs, { role:'ai', text: reply }]
       setMsgs(finalMsgs)
       setUsed(true)
 
-      // ② 利用記録をFirestoreに保存（原文は保存しない・フラグのみ）
-      await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today), {
-        used: true, date: today, uid: user.uid,
-        createdAt: new Date().toISOString(),
-      })
+      // ② 利用記録をFirestoreに保存（原文は保存しない）
+      await setDoc(
+        doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today),
+        { used: true, date: today, uid: user.uid, createdAt: new Date().toISOString() }
+      )
 
-      // ③ AI要約を生成して責任者メールに送信
-      await generateAndSendSummary(finalMsgs)
+      // ③ 要約生成・管理者メール送信（バックグラウンド）
+      generateAndSendSummary(finalMsgs).catch(err =>
+        console.error('[Hidamari] summary/mail error:', err)
+      )
 
-    } catch(err) {
-      console.error('[Hidamari]', err)
+    } catch (err) {
+      console.error('[Hidamari] send error:', err)
       setMsgs(prev => [...prev, { role:'ai', text:'少し時間をおいて、またお話しください 🙏' }])
     }
     setLoading(false)
   }
 
   const generateAndSendSummary = async (conversation) => {
-    try {
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+    const staffDisplayName = profile?.hiraganaFirst
+      ? `${profile.hiraganaFirst}先生`
+      : profile?.name || '職員'
 
-      // 会話テキスト（AIの最初のあいさつは除く）
-      const staffDisplayName = profile?.hiraganaFirst
-        ? `${profile.hiraganaFirst}先生`
-        : profile?.name || '不明な職員'
-      const convText = conversation
-        .slice(1)
-        .map(m => `${m.role === 'user' ? staffDisplayName : 'AI'}：${m.text}`)
-        .join('\n\n')
+    const convText = conversation
+      .slice(1)
+      .map(m => `${m.role === 'user' ? staffDisplayName : 'AI'}：${m.text}`)
+      .join('\n\n')
 
-      // ④ 要約を生成（個人特定されないよう配慮）
-      const sumRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001', max_tokens:600,
-          messages: [{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }]
-        })
-      })
-      const sumData = await sumRes.json()
-      const summary = sumData.content?.find(b=>b.type==='text')?.text || ''
+    // ④ 管理者向け要約を生成
+    const summary = await callClaude({
+      system: '',
+      messages: [{ role:'user', content: `${SUMMARY_PROMPT}\n\n${convText}` }],
+      max_tokens: 600,
+    })
 
-      // ⑤ 要約をFirestoreに保存（管理者のみ閲覧可）
-      await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`), {
+    // ⑤ Firestoreに保存（管理者のみ閲覧可）
+    await setDoc(
+      doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
+      {
         summary,
         date: today,
         uid:  user.uid,
-        staffName: profile?.hiraganaFirst
-          ? `${profile.hiraganaFirst}先生`
-          : profile?.name || '不明',
+        staffName: staffDisplayName,
         createdAt: new Date().toISOString(),
         emailSent: false,
-      })
-
-      // ⑥ 責任者・副責任者のメールアドレスを取得
-      const staffSnap = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
-      const adminEmails = staffSnap.docs
-        .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
-        .map(d => d.data().email)
-        .filter(Boolean)
-
-      if (!adminEmails.length) {
-        console.warn('[Hidamari] 責任者メールが見つかりません')
-        return
       }
+    )
 
-      // ⑦ Vercel Serverless Function経由でメール送信
-      const secret = import.meta.env.VITE_INTERNAL_SECRET || 'copelplus_internal_2026'
-      const mailRes = await fetch('/api/send-hidamari-summary', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-secret': secret,
-        },
-        body: JSON.stringify({
-          summary,
-          date: today,
-          adminEmails,
-        }),
-      })
+    // ⑥ 責任者メールアドレスを取得
+    const staffSnap   = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
+    const adminEmails = staffSnap.docs
+      .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
+      .map(d => d.data().email)
+      .filter(Boolean)
 
-      if (mailRes.ok) {
-        setEmailSent(true)
-        // メール送信済みを記録
-        await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
-          { emailSent: true }, { merge: true })
-        console.log('[Hidamari] ✅ 責任者へメール送信完了')
-      } else {
-        console.error('[Hidamari] メール送信失敗:', await mailRes.text())
-      }
+    if (!adminEmails.length) {
+      console.warn('[Hidamari] 責任者メールアドレスが見つかりません')
+      return
+    }
 
-    } catch(err) {
-      console.error('[Hidamari] 要約・メール送信エラー:', err)
+    // ⑦ Vercel Serverless Function経由でメール送信
+    const mailRes = await fetch('/api/send-hidamari-summary', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-internal-secret': 'copelplus_internal_2026',
+      },
+      body: JSON.stringify({ summary, date: today, adminEmails }),
+    })
+
+    if (mailRes.ok) {
+      await setDoc(
+        doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
+        { emailSent: true },
+        { merge: true }
+      )
+      console.log('[Hidamari] ✅ 責任者へメール送信完了')
     }
   }
 
@@ -190,20 +189,20 @@ export default function Hidamari() {
       <div style={{ flex:1, overflowY:'auto', padding:'14px', display:'flex', flexDirection:'column', gap:12 }}>
         {msgs.map((m, i) => (
           <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:m.role==='user'?'flex-end':'flex-start' }}>
-            {m.role==='ai' && (
+            {m.role === 'ai' && (
               <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
                 <div style={{ width:28, height:28, borderRadius:'50%', background:C.amber, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>☀️</div>
                 <span style={{ fontSize:11, color:C.sub }}>ひだまり</span>
               </div>
             )}
             <div style={{
-              maxWidth:'85%',
-              background: m.role==='user' ? C.primary : C.card,
-              color:       m.role==='user' ? '#fff'    : C.text,
+              maxWidth: '85%',
+              background:   m.role==='user' ? C.primary : C.card,
+              color:        m.role==='user' ? '#fff'    : C.text,
               borderRadius: m.role==='user' ? '18px 18px 6px 18px' : '6px 18px 18px 18px',
-              padding:'12px 14px', fontSize:15, lineHeight:1.75,
-              whiteSpace:'pre-wrap',
-              border: m.role==='ai' ? `1.5px solid ${C.border}` : 'none',
+              padding: '12px 14px', fontSize:15, lineHeight:1.75,
+              whiteSpace: 'pre-wrap',
+              border: m.role === 'ai' ? `1.5px solid ${C.border}` : 'none',
             }}>{m.text}</div>
           </div>
         ))}
@@ -214,7 +213,8 @@ export default function Hidamari() {
             <div style={{ background:C.card, border:`1.5px solid ${C.border}`, borderRadius:'6px 18px 18px 18px', padding:'14px 18px' }}>
               <div style={{ display:'flex', gap:4 }}>
                 {[0,1,2].map(i => (
-                  <div key={i} style={{ width:7, height:7, borderRadius:'50%', background:C.amber, animation:`bounce${i} .9s ${i*0.15}s infinite` }} />
+                  <div key={i} style={{ width:7, height:7, borderRadius:'50%', background:C.amber,
+                    animation:`hidaBounce .9s ${i*0.15}s infinite ease-in-out` }} />
                 ))}
               </div>
             </div>
@@ -231,8 +231,8 @@ export default function Hidamari() {
             disabled={used}
             placeholder={used ? '今日はもう使いました 🌙' : 'ここに気持ちを書いてください…'}
             rows={2}
-            onKeyDown={e => { if(e.key==='Enter' && e.metaKey) send() }}
             autoComplete="off"
+            onKeyDown={e => { if (e.key==='Enter' && e.metaKey) send() }}
             style={{ flex:1, padding:'10px 12px', borderRadius:14, border:`2px solid ${input?C.primary:C.border}`, fontSize:15, fontFamily:FONT, resize:'none', outline:'none', lineHeight:1.5, color:C.text, background:used?C.bg:C.card }}
           />
           <button onClick={send} disabled={!input.trim()||loading||used}
@@ -248,9 +248,10 @@ export default function Hidamari() {
       </div>
 
       <style>{`
-        @keyframes bounce0{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}
-        @keyframes bounce1{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}
-        @keyframes bounce2{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}
+        @keyframes hidaBounce {
+          0%, 80%, 100% { transform: translateY(0); }
+          40%            { transform: translateY(-6px); }
+        }
       `}</style>
     </div>
   )
