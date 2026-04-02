@@ -541,16 +541,17 @@ function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode
       {pwError && (
         <div style={{ background:C.coralLight, borderRadius:9, padding:'8px 12px', marginBottom:11, fontSize:13, color:C.coral }}>{pwError}</div>
       )}
-      <input type="password" autoComplete="new-password" value={pwInput}
+      <form onSubmit={e => { e.preventDefault(); verifyDev() }} style={{ margin:0 }}>
+      <input type="password" autoComplete="current-password" value={pwInput}
         onChange={e => setPwInput(e.target.value)}
-        onKeyDown={e => e.key==='Enter' && verifyDev()}
         placeholder="開発者パスワード"
         style={{ width:'100%', padding:'13px', borderRadius:11, border:`1.5px solid ${C.border}`, fontSize:15, fontFamily:FONT, outline:'none', marginBottom:11, color:C.text }}
       />
-      <button onClick={verifyDev}
+      <button type="submit"
         style={{ width:'100%', padding:'13px', borderRadius:11, border:'none', background:C.primaryDark, color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
         認証する
       </button>
+      </form>
     </div>
   )
 }

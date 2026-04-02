@@ -5,21 +5,20 @@ import { useAuth } from './contexts/AuthContext'
 import { useSync } from './hooks/useSync'
 import { FONT, C } from './theme'
 import { scheduleDailyReport } from './utils/sheets'
+
+// ★ 静的インポート（動的インポートによる状態リセット問題を解消）
 import Login    from './screens/Login'
 import Home     from './screens/Home'
+import Calendar from './screens/Calendar'
+import Sessions from './screens/Sessions'
+import IdeaPost from './screens/IdeaPost'
+import Hidamari from './screens/Hidamari'
+import Settings from './screens/Settings'
 import BottomNav from './components/BottomNav'
 import SideNav   from './components/SideNav'
 
-// ★ 遅延マウント型KeepAlive
-// - 一度も訪問していない画面はマウントしない（起動が軽い）
-// - 訪問した画面はdisplay:noneで保持（状態・リスナーが消えない）
-const LAZY_SCREENS = {
-  calendar: () => import('./screens/Calendar'),
-  sessions: () => import('./screens/Sessions'),
-  ideas:    () => import('./screens/IdeaPost'),
-  hidamari: () => import('./screens/Hidamari'),
-  settings: () => import('./screens/Settings'),
-}
+const SCREEN_MAP = { home:Home, calendar:Calendar, sessions:Sessions, ideas:IdeaPost, hidamari:Hidamari, settings:Settings }
+const ALL_TABS   = Object.keys(SCREEN_MAP)
 
 function useIsDesktop() {
   const [is, setIs] = useState(() => window.innerWidth >= 768)
@@ -41,38 +40,38 @@ function RoleBadge({ role }) {
   )
 }
 
-// 遅延読み込みコンポーネントを管理するフック
-function useLazyScreens() {
-  const [loaded, setLoaded] = useState({})
-  const components = useRef({})
-
-  const ensureLoaded = useCallback(async (id) => {
-    if (loaded[id] || id === 'home') return
-    const loader = LAZY_SCREENS[id]
-    if (!loader) return
-    const mod = await loader()
-    components.current[id] = mod.default
-    setLoaded(prev => ({ ...prev, [id]: true }))
-  }, [loaded])
-
-  return { loaded, components: components.current, ensureLoaded }
+// ★ 遅延マウント型KeepAlive
+// - 初訪問まではマウントしない（起動時の Firestore 同時リクエストを防ぐ）
+// - 一度マウントしたら display:none で保持（状態・リスナー・入力内容が消えない）
+function KeepAliveScreens({ tab, setTab, visited }) {
+  return (
+    <>
+      {ALL_TABS.map(id => {
+        if (!visited[id]) return null  // 未訪問はマウントしない
+        const Comp = SCREEN_MAP[id]
+        return (
+          <div key={id} style={{ display:tab===id?'flex':'none', flexDirection:'column', height:'100%', overflow:'hidden' }}>
+            {id === 'home'
+              ? <Home onNavigate={setTab}/>
+              : <Comp />
+            }
+          </div>
+        )
+      })}
+    </>
+  )
 }
 
 export default function App() {
   const { user, loading, getGoogleToken, can, role } = useAuth()
-  const [tab, setTab] = useState('home')
-  const [visited, setVisited] = useState({ home: true })
-  const { loaded, components, ensureLoaded } = useLazyScreens()
+  const [tab,     setTabState] = useState('home')
+  const [visited, setVisited]  = useState({ home: true })
   const isDesktop = useIsDesktop()
 
-  // タブ切り替え時に遅延読み込み
-  const switchTab = useCallback(async (id) => {
-    setTab(id)
-    if (!visited[id]) {
-      setVisited(prev => ({ ...prev, [id]: true }))
-      await ensureLoaded(id)
-    }
-  }, [visited, ensureLoaded])
+  const setTab = useCallback((id) => {
+    setTabState(id)
+    setVisited(prev => prev[id] ? prev : { ...prev, [id]: true })
+  }, [])
 
   const syncFn = useCallback(async () => {
     try {
@@ -80,7 +79,7 @@ export default function App() {
       const ym = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`
       await getDoc(doc(db, 'facilities', FACILITY_ID, 'schedules', ym))
     } catch (err) {
-      console.warn('[sync] Firestore:', err.code || err.message)
+      console.warn('[sync]', err.code || err.message)
     }
   }, [])
 
@@ -97,21 +96,13 @@ export default function App() {
         const dateKey = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
         const snap    = await getDoc(doc(db, 'facilities', FACILITY_ID, 'sessions', dateKey))
         return { year, month, day, slots: snap.exists() ? snap.data().slots || [] : [] }
-      } catch (err) {
-        console.warn('[sheets] data fetch failed:', err.code)
-        const today = new Date()
-        return { year: today.getFullYear(), month: today.getMonth()+1, day: today.getDate(), slots: [] }
+      } catch {
+        const t = new Date()
+        return { year:t.getFullYear(), month:t.getMonth()+1, day:t.getDate(), slots:[] }
       }
     }
     return scheduleDailyReport(getGoogleToken, getDataFn)
   }, [user, getGoogleToken])
-
-  // ホーム訪問後2秒でSettingsをプリロード（よく使うため）
-  useEffect(() => {
-    if (!user) return
-    const t = setTimeout(() => ensureLoaded('settings'), 2000)
-    return () => clearTimeout(t)
-  }, [user, ensureLoaded])
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:C.bg, fontFamily:FONT }}>
@@ -123,26 +114,6 @@ export default function App() {
   )
 
   if (!user) return <Login />
-
-  // 各画面のレンダリング（visited=trueになった画面のみマウント）
-  const renderScreen = (id) => {
-    if (!visited[id]) return null
-    if (id === 'home') return <Home onNavigate={switchTab}/>
-
-    const Comp = components[id]
-    if (!Comp) {
-      // ロード中スピナー
-      return (
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'60vh' }}>
-          <div style={{ width:22, height:22, borderRadius:'50%', border:`3px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .6s linear infinite' }}/>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-        </div>
-      )
-    }
-    return <Comp />
-  }
-
-  const ALL_TABS = ['home','calendar','sessions','ideas','hidamari','settings']
 
   const SyncBar = () => {
     if (!can.isAdminOrAbove()) return null
@@ -159,28 +130,12 @@ export default function App() {
     )
   }
 
-  const TAB_TITLE = {
-    home:'🏠 ホーム', calendar:'📅 みんなのスケジュール',
-    sessions:'🧩 だれが・どのコマ・どの子ども', ideas:'📬 アイデアポスト',
-    hidamari:'☀️ こころのひだまり', settings:'⚙️ 設定',
-  }
-
-  // 全タブのコンテナ（visitedなものだけマウント、activeのみ表示）
-  const ScreenContainer = () => (
-    <>
-      {ALL_TABS.map(id => (
-        <div key={id}
-          style={{ display: tab===id ? 'flex' : 'none', flexDirection:'column', height:'100%', overflow:'hidden' }}>
-          {renderScreen(id)}
-        </div>
-      ))}
-    </>
-  )
+  const TAB_TITLE = { home:'🏠 ホーム', calendar:'📅 みんなのスケジュール', sessions:'🧩 だれが・どのコマ・どの子ども', ideas:'📬 アイデアポスト', hidamari:'☀️ こころのひだまり', settings:'⚙️ 設定' }
 
   if (isDesktop) {
     return (
       <div style={{ display:'flex', height:'100vh', background:C.bg, fontFamily:FONT, overflow:'hidden' }}>
-        <SideNav active={tab} setActive={switchTab} />
+        <SideNav active={tab} setActive={setTab} />
         <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
           <div style={{ padding:'12px 28px', background:C.card, borderBottom:`1.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
             <div style={{ fontSize:17, fontWeight:700, color:C.text }}>{TAB_TITLE[tab]}</div>
@@ -191,7 +146,7 @@ export default function App() {
           </div>
           <SyncBar />
           <div style={{ flex:1, overflow:'hidden' }}>
-            <ScreenContainer />
+            <KeepAliveScreens tab={tab} setTab={setTab} visited={visited} />
           </div>
         </main>
       </div>
@@ -202,9 +157,9 @@ export default function App() {
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:C.bg, fontFamily:FONT, maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <SyncBar />
       <div style={{ flex:1, overflow:'hidden' }}>
-        <ScreenContainer />
+        <KeepAliveScreens tab={tab} setTab={setTab} visited={visited} />
       </div>
-      <BottomNav active={tab} setActive={switchTab} />
+      <BottomNav active={tab} setActive={setTab} />
     </div>
   )
 }
