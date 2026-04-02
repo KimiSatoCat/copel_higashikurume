@@ -3,40 +3,70 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#52BAA8" />
     <title>コペルプラス 東久留米 勤務管理</title>
-    <!-- ★ 外部リソースを事前接続（フォント読み込みを高速化） -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- ★ Firebaseへの接続を事前確立 -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- ★ Firebaseへの接続を事前確立（DNS解決のオーバーヘッドを排除） -->
     <link rel="preconnect" href="https://firestore.googleapis.com" />
     <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- ★ フォントを非同期ロード（レンダリングをブロックしない） -->
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap"
+      media="print" onload="this.media='all'" />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" />
+    </noscript>
+
     <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      /* ★ フォントロード前にシステムフォントでフォールバック（FOUT を防ぐ） */
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        font-family: 'M PLUS Rounded 1c', sans-serif;
+        font-family: 'M PLUS Rounded 1c', 'Hiragino Maru Gothic ProN', 'Rounded Mplus 1c', sans-serif;
         background: #FFF8F2;
         -webkit-tap-highlight-color: transparent;
+        overscroll-behavior: none;
       }
-      #root { max-width: 480px; margin: 0 auto; min-height: 100vh; }
+      #root { height: 100dvh; overflow: hidden; }
       @media (min-width: 768px) {
-        #root { max-width: none; height: 100vh; overflow: hidden; }
-        body  { overflow: hidden; }
+        #root { display: flex; }
       }
-      /* 初期ローディング（JSが読み込まれる前） */
-      #initial-loader {
-        display: flex; align-items: center; justify-content: center;
-        height: 100vh; flex-direction: column; gap: 16px;
+      /* 初期ローダー（JSが実行されるまで） */
+      #splash {
+        position: fixed; inset: 0; display: flex;
+        flex-direction: column; align-items: center; justify-content: center;
+        background: #FFF8F2; z-index: 9999; gap: 14px;
       }
-      #initial-loader .emoji { font-size: 52px; }
-      #initial-loader .text { font-size: 16px; color: #7A7068; }
-      /* JSが読み込まれたら非表示 */
-      #root:not(:empty) + * { display: none; }
+      #splash .icon { font-size: 52px; }
+      #splash .text { font-size: 15px; color: #7A7068; }
     </style>
   </head>
   <body>
+    <!-- ★ JSロード前にスプラッシュを表示（白画面を排除） -->
+    <div id="splash">
+      <div class="icon">🌿</div>
+      <div class="text">準備中…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Reactがマウントされたらスプラッシュを非表示
+      const ro = new MutationObserver(() => {
+        const root = document.getElementById('root')
+        if (root && root.children.length > 0) {
+          const splash = document.getElementById('splash')
+          if (splash) {
+            splash.style.opacity = '0'
+            splash.style.transition = 'opacity 0.3s'
+            setTimeout(() => splash.remove(), 300)
+          }
+          ro.disconnect()
+        }
+      })
+      ro.observe(document.getElementById('root'), { childList: true, subtree: true })
+    </script>
   </body>
 </html>

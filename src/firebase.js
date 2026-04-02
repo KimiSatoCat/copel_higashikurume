@@ -1,24 +1,27 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth, GoogleAuthProvider } from 'firebase/auth'
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentSingleTabManager,  // ★ MultiTab→SingleTab（リーダー選出のオーバーヘッドを排除）
+} from 'firebase/firestore'
 
-const firebaseConfig = {
+const app = initializeApp({
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
-}
+})
 
-const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 
-// ★ 新しいキャッシュAPIを使用（deprecatedのenableIndexedDbPersistenceを置き換え）
-// 複数タブでも安全に動作、オフラインでも読み書き可能
+// ★ SingleTabManager: タブ間リーダー選出を省略 → 起動が速い
+// ★ cacheSizeBytes: CACHE_SIZE_UNLIMITED は使わない（デフォルト40MBで十分）
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
+    tabManager: persistentSingleTabManager({ forceOwnership: true })
   })
 })
 
