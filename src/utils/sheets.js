@@ -119,30 +119,58 @@ export async function writeDailyReport(accessToken, data) {
 /**
  * 毎日17:00に自動保存するスケジューラー
  */
+// 毎日の保存時刻（複数設定可能）
+const SAVE_TIMES = [
+  { h: 17, m:  0 },   // 17:00
+  { h: 19, m: 10 },   // 19:10
+]
+
 export function scheduleDailyReport(getGoogleToken, getDataFn) {
-  const scheduleNext = () => {
-    const now    = new Date()
-    const target = new Date(now)
-    target.setHours(17, 0, 0, 0)
-    if (now >= target) target.setDate(target.getDate() + 1)
+  let timers = []
 
-    const ms = target.getTime() - now.getTime()
-    console.log(`[DailyReport] 次の保存まで ${Math.round(ms / 60000)} 分`)
-
-    return setTimeout(async () => {
-      console.log('[DailyReport] 17:00 保存開始')
-      try {
-        const token = await getGoogleToken()
-        const data  = await getDataFn()
-        await writeDailyReport(token, data)
-        console.log('[DailyReport] ✅ 完了:', new Date().toLocaleString('ja-JP'))
-      } catch (err) {
-        console.error('[DailyReport] ❌ 保存エラー:', err.message)
-      }
-      scheduleNext()
-    }, ms)
+  const doSave = async (label) => {
+    console.log(`[DailyReport] ${label} 保存開始`)
+    try {
+      const token = await getGoogleToken()
+      const data  = await getDataFn()
+      await writeDailyReport(token, data)
+      console.log(`[DailyReport] ✅ ${label} 完了:`, new Date().toLocaleString('ja-JP'))
+    } catch (err) {
+      console.error(`[DailyReport] ❌ ${label} 保存エラー:`, err.message)
+    }
   }
 
-  const timer = scheduleNext()
-  return () => clearTimeout(timer)
+  const scheduleAll = () => {
+    // 既存タイマーをクリア
+    timers.forEach(t => clearTimeout(t))
+    timers = []
+
+    const now = new Date()
+
+    SAVE_TIMES.forEach(({ h, m }) => {
+      const target = new Date(now)
+      target.setHours(h, m, 0, 0)
+      // 今日の時刻を過ぎていたら翌日
+      if (now >= target) target.setDate(target.getDate() + 1)
+
+      const ms    = target.getTime() - now.getTime()
+      const label = `${h}:${String(m).padStart(2,'0')}`
+      console.log(`[DailyReport] ${label} まで ${Math.round(ms / 60000)} 分`)
+
+      const t = setTimeout(async () => {
+        await doSave(label)
+        // 翌日の同時刻に再スケジュール
+        const next = new Date()
+        next.setDate(next.getDate() + 1)
+        next.setHours(h, m, 0, 0)
+        const msNext = next.getTime() - Date.now()
+        timers.push(setTimeout(async () => { await doSave(label); scheduleAll() }, msNext))
+      }, ms)
+
+      timers.push(t)
+    })
+  }
+
+  scheduleAll()
+  return () => timers.forEach(t => clearTimeout(t))
 }
