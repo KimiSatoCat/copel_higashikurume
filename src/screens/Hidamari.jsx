@@ -141,12 +141,25 @@ export default function Hidamari() {
       }
     )
 
-    // ⑥ 責任者メールアドレスを取得
-    const staffSnap   = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
-    const adminEmails = staffSnap.docs
-      .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
-      .map(d => d.data().email)
-      .filter(Boolean)
+    // ⑥ 通知先メールアドレスを取得（施設設定 → ロールベースの順で優先）
+    let adminEmails = []
+
+    // 施設設定に登録されたアドレスを最優先
+    try {
+      const configSnap = await getDoc(doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'))
+      if (configSnap.exists() && configSnap.data().adminEmails?.length) {
+        adminEmails = configSnap.data().adminEmails.filter(Boolean)
+      }
+    } catch (_) {}
+
+    // 未設定の場合はroleから取得
+    if (!adminEmails.length) {
+      const staffSnap = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
+      adminEmails = staffSnap.docs
+        .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
+        .map(d => d.data().email)
+        .filter(Boolean)
+    }
 
     if (!adminEmails.length) {
       console.warn('[Hidamari] 責任者メールアドレスが見つかりません')

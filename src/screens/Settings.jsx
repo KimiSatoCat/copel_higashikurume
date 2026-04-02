@@ -268,6 +268,7 @@ export default function Settings() {
         {(can.editStaff()||devMode)    && <Tab id="staff"    label="職員管理"/>}
         {(can.editChildren()||devMode) && <Tab id="children" label="児童管理"/>}
         {(devMode||can.assignAdmin())  && <Tab id="roles"    label="権限設定"/>}
+        {(can.isAdminOrAbove()||devMode) && <Tab id="facility" label="🏢 施設設定"/>}
         <Tab id="records" label="📊 これまでの記録"/>
         <Tab id="dev"     label="🔐 開発者"/>
       </div>
@@ -275,6 +276,7 @@ export default function Settings() {
       {tab==='staff'    && <StaffTab    staffList={staffList} onSave={saveStaff} onDelete={deleteStaff} onAddTest={addTestStaff}/>}
       {tab==='children' && <ChildrenTab children={children}  onSave={saveChild}/>}
       {tab==='roles'    && <RolesTab    staffList={staffList} updateRole={updateRole} devMode={devMode} role={role}/>}
+      {tab==='facility' && <FacilityTab />}
       {tab==='records'  && <RecordsTab  spreadsheetId={spreadsheetId}/>}
       {tab==='dev'      && <DevTab      devMode={devMode} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode} addTestStaff={addTestStaff} onResetHidamari={resetHidamari}/>}
 
@@ -515,6 +517,81 @@ function RecordsTab({ spreadsheetId }) {
 }
 
 // ── 開発者 ─────────────────────────────────────────────────
+// ─── 施設設定タブ ─────────────────────────────────────────────
+function FacilityTab() {
+  const [emails,  setEmails]  = useState('')
+  const [saving,  setSaving]  = useState(false)
+  const [msg,     setMsg]     = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getDoc(doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'))
+      .then(snap => {
+        if (snap.exists()) setEmails((snap.data().adminEmails || []).join('\n'))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    const list = emails.split(/[\n,]+/).map(e => e.trim()).filter(Boolean)
+    try {
+      await setDoc(
+        doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'),
+        { adminEmails: list },
+        { merge: true }
+      )
+      setMsg(`✅ 保存しました（${list.length}件）`)
+      setTimeout(() => setMsg(''), 3000)
+    } catch (err) {
+      setMsg(`❌ ${err.message}`)
+    }
+    setSaving(false)
+  }
+
+  if (loading) return <div style={{ color:C.sub, fontSize:14, padding:16 }}>読み込み中…</div>
+
+  return (
+    <div style={{ background:C.card, borderRadius:18, padding:20, border:`1.5px solid ${C.border}` }}>
+      <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:6 }}>🏢 施設設定</div>
+
+      <div style={{ background:C.amberLight, borderRadius:12, padding:'12px 14px', marginBottom:16, border:`1px solid ${C.amber}44` }}>
+        <div style={{ fontSize:13, fontWeight:700, color:'#B07800', marginBottom:4 }}>☀️ こころのひだまり — 通知先メールアドレス</div>
+        <div style={{ fontSize:12, color:'#B07800', lineHeight:1.7 }}>
+          職員がひだまりを利用した際のAI要約を送信するメールアドレスを設定します。<br/>
+          複数ある場合は1行に1つ入力してください。
+        </div>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:12, color:C.sub, marginBottom:6 }}>責任者・副責任者のメールアドレス（1行1件）</div>
+        <textarea
+          value={emails}
+          onChange={e => setEmails(e.target.value)}
+          placeholder={'例：\nkanrisya@example.com\nfukukanrisya@example.com'}
+          rows={5}
+          style={{ width:'100%', padding:'11px 13px', borderRadius:12, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:FONT, outline:'none', resize:'vertical', lineHeight:1.7, boxSizing:'border-box', color:C.text }}
+        />
+        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>
+          ここに入力したアドレスが最優先で使われます。未入力の場合は権限設定から責任者ロールのアドレスが使われます。
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ padding:'8px 12px', borderRadius:9, background:msg.startsWith('✅')?C.primaryLight:C.coralLight, color:msg.startsWith('✅')?C.primaryDark:C.coral, fontSize:13, marginBottom:10 }}>
+          {msg}
+        </div>
+      )}
+
+      <button onClick={save} disabled={saving}
+        style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', background:saving?C.bg:C.primary, fontSize:14, fontWeight:700, color:saving?C.muted:'#fff', cursor:saving?'default':'pointer', fontFamily:FONT }}>
+        {saving ? '保存中…' : '保存する'}
+      </button>
+    </div>
+  )
+}
+
 function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode, addTestStaff, onResetHidamari }) {
   return devMode ? (
     <div style={{ background:C.coralLight, borderRadius:18, padding:20, border:`1.5px solid ${C.coral}44` }}>
