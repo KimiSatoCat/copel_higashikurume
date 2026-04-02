@@ -1,5 +1,6 @@
 // api/send-hidamari-summary.js
-// Vercel Serverless Function: こころのひだまりの要約を責任者メールに送信
+// サーバーサイドで admin メールを Firestore REST API から取得して送信
+// クライアントは summary だけを送ればよい
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -9,27 +10,83 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')    return res.status(405).json({ error: 'Method not allowed' })
 
-  // 簡易認証（ハードコード — 同一オリジンからのリクエスト前提）
   const secret = req.headers['x-internal-secret']
   if (secret !== 'copelplus_internal_2026') {
-    console.error('[hidamari] unauthorized secret:', secret)
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const { summary, date, adminEmails } = req.body
-  if (!summary || !adminEmails?.length) {
-    return res.status(400).json({ error: 'summary と adminEmails は必須です' })
+  const { summary, date } = req.body
+  if (!summary) return res.status(400).json({ error: 'summary は必須です' })
+
+  const RESEND_API_KEY    = process.env.RESEND_API_KEY
+  const FIREBASE_API_KEY  = process.env.VITE_FIREBASE_API_KEY
+  const PROJECT_ID        = process.env.VITE_FIREBASE_PROJECT_ID || 'copelplus-higashikurume'
+  const FACILITY_ID       = 'higashikurume'
+
+  if (!RESEND_API_KEY)   return res.status(500).json({ error: 'RESEND_API_KEY が未設定です' })
+  if (!FIREBASE_API_KEY) return res.status(500).json({ error: 'FIREBASE_API_KEY が未設定です' })
+
+  // ─── ① Firebase に匿名ログインして ID トークンを取得 ───────────
+  let idToken
+  try {
+    const authRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`,
+      { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ returnSecureToken:true }) }
+    )
+    const authData = await authRes.json()
+    if (!authRes.ok) throw new Error(authData.error?.message || 'anonymous auth failed')
+    idToken = authData.idToken
+  } catch (err) {
+    console.error('[hidamari] Firebase auth error:', err.message)
+    return res.status(500).json({ error: `Firebase 認証エラー: ${err.message}` })
   }
 
-  const RESEND_API_KEY = process.env.RESEND_API_KEY
-  if (!RESEND_API_KEY) {
-    // APIキー未設定でも200を返し、ログだけ残す（アプリを止めない）
-    console.warn('[hidamari] RESEND_API_KEY が未設定です。メール送信をスキップします。')
-    console.log('[hidamari] 送信予定メール:', { date, adminEmails, summaryLength: summary.length })
-    return res.status(200).json({ success: false, reason: 'RESEND_API_KEY not configured' })
+  // ─── ② Firestore REST API で施設設定（通知先メール）を取得 ────
+  let adminEmails = []
+  try {
+    // まず施設設定の手動登録メールを確認
+    const configRes = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/config/hidamari`,
+      { headers:{ Authorization:`Bearer ${idToken}` } }
+    )
+    if (configRes.ok) {
+      const configData = await configRes.json()
+      const arr = configData.fields?.adminEmails?.arrayValue?.values || []
+      adminEmails = arr.map(v => v.stringValue).filter(Boolean)
+    }
+  } catch (err) {
+    console.warn('[hidamari] config fetch error:', err.message)
   }
 
-  // メール本文
+  // ─── ③ 手動登録がなければ staff の role から取得 ──────────────
+  if (!adminEmails.length) {
+    try {
+      const staffRes = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/staff`,
+        { headers:{ Authorization:`Bearer ${idToken}` } }
+      )
+      if (staffRes.ok) {
+        const staffData = await staffRes.json()
+        const docs = staffData.documents || []
+        const ADMIN_ROLES = ['admin','sub_admin','developer']
+        adminEmails = docs
+          .filter(d => ADMIN_ROLES.includes(d.fields?.role?.stringValue))
+          .map(d => d.fields?.email?.stringValue)
+          .filter(Boolean)
+      }
+    } catch (err) {
+      console.warn('[hidamari] staff fetch error:', err.message)
+    }
+  }
+
+  if (!adminEmails.length) {
+    console.warn('[hidamari] 送信先メールアドレスが見つかりません')
+    return res.status(200).json({ success:false, reason:'no admin emails found' })
+  }
+
+  console.log('[hidamari] 送信先:', adminEmails)
+
+  // ─── ④ メール送信 ─────────────────────────────────────────────
   const html = `
 <!DOCTYPE html>
 <html lang="ja">
@@ -54,7 +111,7 @@ export default async function handler(req, res) {
     </div>
     <div style="background:#FFECEA;border-radius:10px;padding:14px;margin-bottom:20px">
       <div style="font-size:12px;color:#CC5040;line-height:1.7">
-        ⚠️ この要約はAIが自動生成したものです。対応は責任者のご判断にお任せします。
+        ⚠️ この要約はAIが自動生成したものです。対応は責任者のご判断にお任せします。<br/>
         職員のプライバシーに十分ご配慮ください。
       </div>
     </div>
@@ -67,31 +124,24 @@ export default async function handler(req, res) {
 
   try {
     const emailRes = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
-        'Content-Type':  'application/json',
-      },
+      method:'POST',
+      headers:{ 'Authorization':`Bearer ${RESEND_API_KEY}`, 'Content-Type':'application/json' },
       body: JSON.stringify({
-        from:    'onboarding@resend.dev',   // テスト用ドメイン（認証不要）
+        from:    'onboarding@resend.dev',
         to:      adminEmails,
         subject: `【こころのひだまり】${date} 利用通知（コペルプラス 東久留米）`,
         html,
       }),
     })
-
     const emailData = await emailRes.json()
-
     if (!emailRes.ok) {
       console.error('[hidamari] Resend error:', emailData)
-      return res.status(500).json({ error: 'メール送信に失敗しました', detail: emailData })
+      return res.status(500).json({ error:'メール送信失敗', detail:emailData })
     }
-
-    console.log('[hidamari] ✅ メール送信成功:', emailData.id)
-    return res.status(200).json({ success: true, id: emailData.id })
-
+    console.log('[hidamari] ✅ メール送信完了:', emailData.id, '→', adminEmails)
+    return res.status(200).json({ success:true, id:emailData.id, sentTo:adminEmails })
   } catch (err) {
     console.error('[hidamari] 送信エラー:', err.message)
-    return res.status(500).json({ error: err.message })
+    return res.status(500).json({ error:err.message })
   }
 }

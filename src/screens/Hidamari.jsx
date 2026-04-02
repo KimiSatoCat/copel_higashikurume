@@ -1,20 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
 
-// ★ Claude APIはVercel Serverless Function経由で呼び出す（CORS・セキュリティ対策）
+// Claude API はプロキシ経由
 async function callClaude({ system, messages, max_tokens = 1000 }) {
   const res = await fetch('/api/claude-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model:      'claude-haiku-4-5-20251001',
-      max_tokens,
-      system,
-      messages,
-    }),
+    body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens, system, messages }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -45,7 +40,7 @@ const SUMMARY_PROMPT = `以下は職員とAIカウンセラーの会話内容で
 ・職員の名前を明記する（例：「〇〇先生は〜」）
 ・具体的なエピソードも含めて記載する
 ・ただし、すべての表現は誰も傷つかないやさしい言葉で書く
-  （批判・否定・決めつけをせず、「〜のようにお感じのようです」「〜という場面があったようです」などの柔らかい表現を使う）
+  （批判・否定・決めつけをせず、「〜のようにお感じのようです」などの柔らかい表現を使う）
 ・最後に「どのような関わりが考えられるか」を3点提案する
 ・全体で400字以内
 
@@ -83,112 +78,75 @@ export default function Hidamari() {
     setLoading(true)
 
     try {
-      // ① 寄り添い返答を生成
+      // ① 寄り添い返答
       const history = newMsgs.slice(1).map(m => ({
-        role:    m.role === 'user' ? 'user' : 'assistant',
-        content: m.text,
+        role: m.role === 'user' ? 'user' : 'assistant', content: m.text,
       }))
-      const reply = await callClaude({ system: SYSTEM_PROMPT, messages: history })
-      const finalMsgs = [...newMsgs, { role:'ai', text: reply }]
+      const reply = await callClaude({ system:SYSTEM_PROMPT, messages:history })
+      const finalMsgs = [...newMsgs, { role:'ai', text:reply }]
       setMsgs(finalMsgs)
       setUsed(true)
 
-      // ② 利用記録をFirestoreに保存（原文は保存しない）
-      await setDoc(
+      // ② 利用記録（Firestoreが使えるときだけ保存、失敗しても止まらない）
+      setDoc(
         doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today),
-        { used: true, date: today, uid: user.uid, createdAt: new Date().toISOString() }
-      )
+        { used:true, date:today, uid:user.uid, createdAt:new Date().toISOString() }
+      ).catch(err => console.warn('[Hidamari] log save:', err.code))
 
-      // ③ 要約生成・管理者メール送信（バックグラウンド）
-      generateAndSendSummary(finalMsgs).catch(err =>
-        console.error('[Hidamari] summary/mail error:', err)
+      // ③ 要約生成・メール送信（バックグラウンド）
+      sendSummaryToServer(finalMsgs).catch(err =>
+        console.error('[Hidamari] summary error:', err.message)
       )
 
     } catch (err) {
-      console.error('[Hidamari] send error:', err)
+      console.error('[Hidamari]', err)
       setMsgs(prev => [...prev, { role:'ai', text:'少し時間をおいて、またお話しください 🙏' }])
     }
     setLoading(false)
   }
 
-  const generateAndSendSummary = async (conversation) => {
-    const staffDisplayName = profile?.hiraganaFirst
-      ? `${profile.hiraganaFirst}先生`
-      : profile?.name || '職員'
+  const sendSummaryToServer = async (conversation) => {
+    const name = profile?.hiraganaFirst ? `${profile.hiraganaFirst}先生` : profile?.name || '職員'
 
     const convText = conversation
       .slice(1)
-      .map(m => `${m.role === 'user' ? staffDisplayName : 'AI'}：${m.text}`)
+      .map(m => `${m.role==='user' ? name : 'AI'}：${m.text}`)
       .join('\n\n')
 
-    // ④ 管理者向け要約を生成
+    // ④ AI 要約生成
     const summary = await callClaude({
       system: '',
-      messages: [{ role:'user', content: `${SUMMARY_PROMPT}\n\n${convText}` }],
+      messages: [{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }],
       max_tokens: 600,
     })
 
-    // ⑤ Firestoreに保存（管理者のみ閲覧可）
-    await setDoc(
+    // ⑤ Firestoreに保存（管理者が後から確認できるように）
+    setDoc(
       doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
-      {
-        summary,
-        date: today,
-        uid:  user.uid,
-        staffName: staffDisplayName,
-        createdAt: new Date().toISOString(),
-        emailSent: false,
-      }
-    )
+      { summary, date:today, uid:user.uid, staffName:name, createdAt:new Date().toISOString() }
+    ).catch(() => {})
 
-    // ⑥ 通知先メールアドレスを取得（施設設定 → ロールベースの順で優先）
-    let adminEmails = []
-
-    // 施設設定に登録されたアドレスを最優先
-    try {
-      const configSnap = await getDoc(doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'))
-      if (configSnap.exists() && configSnap.data().adminEmails?.length) {
-        adminEmails = configSnap.data().adminEmails.filter(Boolean)
-      }
-    } catch (_) {}
-
-    // 未設定の場合はroleから取得
-    if (!adminEmails.length) {
-      const staffSnap = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
-      adminEmails = staffSnap.docs
-        .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
-        .map(d => d.data().email)
-        .filter(Boolean)
-    }
-
-    if (!adminEmails.length) {
-      console.warn('[Hidamari] 責任者メールアドレスが見つかりません')
-      return
-    }
-
-    // ⑦ Vercel Serverless Function経由でメール送信
-    const mailRes = await fetch('/api/send-hidamari-summary', {
+    // ⑥ サーバーへ送信（メール先はサーバーが Firestore REST API で取得）
+    const res = await fetch('/api/send-hidamari-summary', {
       method: 'POST',
       headers: {
         'Content-Type':      'application/json',
         'x-internal-secret': 'copelplus_internal_2026',
       },
-      body: JSON.stringify({ summary, date: today, adminEmails }),
+      body: JSON.stringify({ summary, date: today }),
+      // ← adminEmails を渡さない。サーバーが自分で取得する
     })
 
-    if (mailRes.ok) {
-      await setDoc(
-        doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
-        { emailSent: true },
-        { merge: true }
-      )
-      console.log('[Hidamari] ✅ 責任者へメール送信完了')
+    const result = await res.json()
+    if (result.success) {
+      console.log('[Hidamari] ✅ メール送信完了 →', result.sentTo)
+    } else {
+      console.warn('[Hidamari] メール未送信:', result.reason || result.error)
     }
   }
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
-
       <div style={{ padding:'14px', background:`linear-gradient(135deg,${C.amberLight},#FFF0D0)`, borderBottom:`1.5px solid ${C.amber}33`, flexShrink:0 }}>
         <div style={{ fontSize:18, fontWeight:800, color:C.text }}>☀️ こころのひだまり</div>
         <div style={{ fontSize:13, color:C.sub, marginTop:3 }}>ここだけの、あなたの安心できる場所</div>
@@ -202,32 +160,30 @@ export default function Hidamari() {
       <div style={{ flex:1, overflowY:'auto', padding:'14px', display:'flex', flexDirection:'column', gap:12 }}>
         {msgs.map((m, i) => (
           <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:m.role==='user'?'flex-end':'flex-start' }}>
-            {m.role === 'ai' && (
+            {m.role==='ai' && (
               <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
                 <div style={{ width:28, height:28, borderRadius:'50%', background:C.amber, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>☀️</div>
                 <span style={{ fontSize:11, color:C.sub }}>ひだまり</span>
               </div>
             )}
             <div style={{
-              maxWidth: '85%',
+              maxWidth:'85%',
               background:   m.role==='user' ? C.primary : C.card,
               color:        m.role==='user' ? '#fff'    : C.text,
               borderRadius: m.role==='user' ? '18px 18px 6px 18px' : '6px 18px 18px 18px',
-              padding: '12px 14px', fontSize:15, lineHeight:1.75,
-              whiteSpace: 'pre-wrap',
-              border: m.role === 'ai' ? `1.5px solid ${C.border}` : 'none',
+              padding:'12px 14px', fontSize:15, lineHeight:1.75,
+              whiteSpace:'pre-wrap',
+              border: m.role==='ai' ? `1.5px solid ${C.border}` : 'none',
             }}>{m.text}</div>
           </div>
         ))}
-
         {loading && (
           <div style={{ display:'flex', alignItems:'flex-end', gap:8 }}>
             <div style={{ width:28, height:28, borderRadius:'50%', background:C.amber, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>☀️</div>
             <div style={{ background:C.card, border:`1.5px solid ${C.border}`, borderRadius:'6px 18px 18px 18px', padding:'14px 18px' }}>
               <div style={{ display:'flex', gap:4 }}>
                 {[0,1,2].map(i => (
-                  <div key={i} style={{ width:7, height:7, borderRadius:'50%', background:C.amber,
-                    animation:`hidaBounce .9s ${i*0.15}s infinite ease-in-out` }} />
+                  <div key={i} style={{ width:7, height:7, borderRadius:'50%', background:C.amber, animation:`hidaBounce .9s ${i*0.15}s infinite ease-in-out` }} />
                 ))}
               </div>
             </div>
@@ -239,12 +195,10 @@ export default function Hidamari() {
       <div style={{ padding:'10px 14px', background:C.card, borderTop:`1.5px solid ${C.border}`, flexShrink:0 }}>
         <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
           <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
+            value={input} onChange={e => setInput(e.target.value)}
             disabled={used}
             placeholder={used ? '今日はもう使いました 🌙' : 'ここに気持ちを書いてください…'}
-            rows={2}
-            autoComplete="off"
+            rows={2} autoComplete="off"
             onKeyDown={e => { if (e.key==='Enter' && e.metaKey) send() }}
             style={{ flex:1, padding:'10px 12px', borderRadius:14, border:`2px solid ${input?C.primary:C.border}`, fontSize:15, fontFamily:FONT, resize:'none', outline:'none', lineHeight:1.5, color:C.text, background:used?C.bg:C.card }}
           />
@@ -259,13 +213,7 @@ export default function Hidamari() {
           ここに書いた内容は、あなただけが見ることができます
         </div>
       </div>
-
-      <style>{`
-        @keyframes hidaBounce {
-          0%, 80%, 100% { transform: translateY(0); }
-          40%            { transform: translateY(-6px); }
-        }
-      `}</style>
+      <style>{`@keyframes hidaBounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}`}</style>
     </div>
   )
 }
