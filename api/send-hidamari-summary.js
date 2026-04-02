@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing required fields' })
   }
 
-  const RESEND_API_KEY = process.env.RESEND_API_KEY
+  const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.VITE_RESEND_API_KEY
   if (!RESEND_API_KEY) {
     return res.status(500).json({ error: 'Resend API key not configured' })
   }
