@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
@@ -24,14 +24,14 @@ const SUMMARY_PROMPT = `以下は職員とAIカウンセラーの会話内容で
 
 ・誰も傷つかない、やさしい言葉で
 ・「〇〇のようなことで悩んでいるようです」という形式
-・具体的な個人が特定されないよう配慮する
-・最後に「どのような対応が考えられるか」を3点提案する
+・具体的な個人が特定されないよう最大限配慮する（名前・具体的エピソードを記載しない）
+・最後に「どのような関わりが考えられるか」を3点提案する
 ・全体で300字以内
 
 会話内容：`
 
 export default function Hidamari() {
-  const { user, profile, can } = useAuth()
+  const { user, profile } = useAuth()
   const today    = new Date().toISOString().slice(0,10)
   const [msgs,   setMsgs]   = useState([
     { role:'ai', text:'こんにちは 🌤️\n\nここは、あなただけの安心できる場所です。\n今日、こころにたまっていることを、なんでも話してくださいね。\n\nどんな気持ちも、ちゃんと受け止めます。' }
@@ -39,6 +39,7 @@ export default function Hidamari() {
   const [input,  setInput]  = useState('')
   const [loading,setLoading] = useState(false)
   const [used,   setUsed]   = useState(false)
+  const [emailSent, setEmailSent] = useState(false)
   const bottomRef = useRef()
 
   useEffect(() => {
@@ -59,8 +60,12 @@ export default function Hidamari() {
 
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-      const history = newMsgs.slice(1).map(m => ({ role: m.role==='user'?'user':'assistant', content: m.text }))
+      const history = newMsgs.slice(1).map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.text
+      }))
 
+      // ① Claudeが共感・寄り添いの返答を生成
       const res  = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01' },
@@ -73,48 +78,93 @@ export default function Hidamari() {
       setMsgs(finalMsgs)
       setUsed(true)
 
-      // Firestoreに利用記録を保存（原文は保存しない・使用済みフラグのみ）
-      const ref = doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today)
-      await setDoc(ref, { used:true, date:today, uid:user.uid })
+      // ② 利用記録をFirestoreに保存（原文は保存しない・フラグのみ）
+      await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today), {
+        used: true, date: today, uid: user.uid,
+        createdAt: new Date().toISOString(),
+      })
 
-      // 管理者向けAI要約を生成して送信
-      await sendSummaryToAdmins(finalMsgs)
+      // ③ AI要約を生成して責任者メールに送信
+      await generateAndSendSummary(finalMsgs)
 
     } catch(err) {
-      console.error(err)
+      console.error('[Hidamari]', err)
       setMsgs(prev => [...prev, { role:'ai', text:'少し時間をおいて、またお話しください 🙏' }])
     }
     setLoading(false)
   }
 
-  const sendSummaryToAdmins = async (conversation) => {
+  const generateAndSendSummary = async (conversation) => {
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-      const convText = conversation.filter(m=>m.role!=='system').map(m=>`${m.role==='user'?'職員':'AI'}：${m.text}`).join('\n\n')
 
-      const res  = await fetch('https://api.anthropic.com/v1/messages', {
+      // 会話テキスト（AIの最初のあいさつは除く）
+      const convText = conversation
+        .slice(1)  // 最初のAIあいさつを除く
+        .map(m => `${m.role === 'user' ? '職員' : 'AI'}：${m.text}`)
+        .join('\n\n')
+
+      // ④ 要約を生成（個人特定されないよう配慮）
+      const sumRes = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01' },
         body: JSON.stringify({
-          model:'claude-haiku-4-5-20251001', max_tokens:600,
-          messages:[{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }]
+          model: 'claude-haiku-4-5-20251001', max_tokens:600,
+          messages: [{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }]
         })
       })
-      const data    = await res.json()
-      const summary = data.content?.find(b=>b.type==='text')?.text || ''
+      const sumData = await sumRes.json()
+      const summary = sumData.content?.find(b=>b.type==='text')?.text || ''
 
-      // 要約をFirestoreに保存（管理者のみ閲覧可能）
-      const summaryRef = doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`)
-      await setDoc(summaryRef, {
+      // ⑤ 要約をFirestoreに保存（管理者のみ閲覧可）
+      await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`), {
         summary,
         date: today,
         uid:  user.uid,
-        staffName: profile?.name || '不明',
+        staffName: '（匿名）',  // 管理者閲覧時も氏名は表示しない
         createdAt: new Date().toISOString(),
+        emailSent: false,
       })
-      // TODO: Firebase Functions経由でメール送信
+
+      // ⑥ 責任者・副責任者のメールアドレスを取得
+      const staffSnap = await getDocs(collection(db, 'facilities', FACILITY_ID, 'staff'))
+      const adminEmails = staffSnap.docs
+        .filter(d => ['admin','sub_admin','developer'].includes(d.data().role))
+        .map(d => d.data().email)
+        .filter(Boolean)
+
+      if (!adminEmails.length) {
+        console.warn('[Hidamari] 責任者メールが見つかりません')
+        return
+      }
+
+      // ⑦ Vercel Serverless Function経由でメール送信
+      const secret = import.meta.env.VITE_INTERNAL_SECRET || 'copelplus_internal_2026'
+      const mailRes = await fetch('/api/send-hidamari-summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-secret': secret,
+        },
+        body: JSON.stringify({
+          summary,
+          date: today,
+          adminEmails,
+        }),
+      })
+
+      if (mailRes.ok) {
+        setEmailSent(true)
+        // メール送信済みを記録
+        await setDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
+          { emailSent: true }, { merge: true })
+        console.log('[Hidamari] ✅ 責任者へメール送信完了')
+      } else {
+        console.error('[Hidamari] メール送信失敗:', await mailRes.text())
+      }
+
     } catch(err) {
-      console.error('要約生成エラー:', err)
+      console.error('[Hidamari] 要約・メール送信エラー:', err)
     }
   }
 
@@ -176,6 +226,7 @@ export default function Hidamari() {
             placeholder={used ? '今日はもう使いました 🌙' : 'ここに気持ちを書いてください…'}
             rows={2}
             onKeyDown={e => { if(e.key==='Enter' && e.metaKey) send() }}
+            autoComplete="off"
             style={{ flex:1, padding:'10px 12px', borderRadius:14, border:`2px solid ${input?C.primary:C.border}`, fontSize:15, fontFamily:FONT, resize:'none', outline:'none', lineHeight:1.5, color:C.text, background:used?C.bg:C.card }}
           />
           <button onClick={send} disabled={!input.trim()||loading||used}
@@ -185,7 +236,9 @@ export default function Hidamari() {
             </svg>
           </button>
         </div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:6, textAlign:'center' }}>ここに書いた内容は、あなただけが見ることができます</div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:6, textAlign:'center' }}>
+          ここに書いた内容は、あなただけが見ることができます
+        </div>
       </div>
 
       <style>{`
