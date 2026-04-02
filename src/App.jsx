@@ -83,7 +83,7 @@ export default function App() {
     }
   }, [])
 
-  const { syncing, lastSync, isActive, manualSync, formatNext } = useSync(syncFn)
+  const { syncing, lastSync, isActive, manualSync, statusText } = useSync(syncFn)
 
   useEffect(() => {
     if (!user) return
@@ -120,7 +120,7 @@ export default function App() {
     return (
       <div style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 14px', background:C.card, borderBottom:`1px solid ${C.border}`, fontSize:11, color:C.sub, flexShrink:0 }}>
         <div style={{ width:6, height:6, borderRadius:'50%', background:isActive?C.green:C.muted, flexShrink:0 }}/>
-        <span style={{ flex:1 }}>{syncing?'同期中…':formatNext()}</span>
+        <span style={{ flex:1 }}>{syncing?'同期中…':statusText}</span>
         {lastSync && <span style={{ color:C.muted }}>更新: {lastSync.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}</span>}
         <button onClick={manualSync} disabled={syncing}
           style={{ padding:'2px 9px', borderRadius:5, border:`1px solid ${C.border}`, background:'transparent', fontSize:11, color:syncing?C.muted:C.primary, cursor:syncing?'default':'pointer', fontFamily:FONT, fontWeight:600 }}>
