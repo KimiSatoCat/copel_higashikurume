@@ -126,15 +126,24 @@ export default function Hidamari() {
       { summary, date:today, uid:user.uid, staffName:name, createdAt:new Date().toISOString() }
     ).catch(() => {})
 
-    // ⑥ サーバーへ送信（メール先はサーバーが Firestore REST API で取得）
+    // ⑥ ログイン中ユーザーの Firebase ID トークンを取得してサーバーに渡す
+    // サーバーがこのトークンで Firestore REST API を認証する
+    const { getAuth } = await import('firebase/auth')
+    const firebaseUser = getAuth().currentUser
+    let firebaseToken = ''
+    if (firebaseUser) {
+      try { firebaseToken = await firebaseUser.getIdToken() } catch (_) {}
+    }
+
+    // ⑦ サーバーへ送信（メール先はサーバーが Firestore REST API で取得）
     const res = await fetch('/api/send-hidamari-summary', {
       method: 'POST',
       headers: {
-        'Content-Type':      'application/json',
-        'x-internal-secret': 'copelplus_internal_2026',
+        'Content-Type':        'application/json',
+        'x-internal-secret':   'copelplus_internal_2026',
+        'x-firebase-token':    firebaseToken,
       },
       body: JSON.stringify({ summary, date: today }),
-      // ← adminEmails を渡さない。サーバーが自分で取得する
     })
 
     const result = await res.json()

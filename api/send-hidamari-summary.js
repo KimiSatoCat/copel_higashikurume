@@ -19,26 +19,16 @@ export default async function handler(req, res) {
   if (!summary) return res.status(400).json({ error: 'summary は必須です' })
 
   const RESEND_API_KEY    = process.env.RESEND_API_KEY
-  const FIREBASE_API_KEY  = process.env.VITE_FIREBASE_API_KEY
   const PROJECT_ID        = process.env.VITE_FIREBASE_PROJECT_ID || 'copelplus-higashikurume'
   const FACILITY_ID       = 'higashikurume'
 
-  if (!RESEND_API_KEY)   return res.status(500).json({ error: 'RESEND_API_KEY が未設定です' })
-  if (!FIREBASE_API_KEY) return res.status(500).json({ error: 'FIREBASE_API_KEY が未設定です' })
+  if (!RESEND_API_KEY) return res.status(500).json({ error: 'RESEND_API_KEY が未設定です' })
 
-  // ─── ① Firebase に匿名ログインして ID トークンを取得 ───────────
-  let idToken
-  try {
-    const authRes = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`,
-      { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ returnSecureToken:true }) }
-    )
-    const authData = await authRes.json()
-    if (!authRes.ok) throw new Error(authData.error?.message || 'anonymous auth failed')
-    idToken = authData.idToken
-  } catch (err) {
-    console.error('[hidamari] Firebase auth error:', err.message)
-    return res.status(500).json({ error: `Firebase 認証エラー: ${err.message}` })
+  // ─── ① クライアントの Firebase ID トークンで Firestore を認証 ───
+  const idToken = req.headers['x-firebase-token']
+  if (!idToken) {
+    console.error('[hidamari] Firebase token missing')
+    return res.status(401).json({ error: 'Firebase token required' })
   }
 
   // ─── ② Firestore REST API で施設設定（通知先メール）を取得 ────

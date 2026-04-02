@@ -154,15 +154,20 @@ export default function Settings() {
   }
 
   // ─── テスト職員追加 ──────────────────────────────────────
+  const [hidamariResetMsg, setHidamariResetMsg] = useState('')
   const resetHidamari = async () => {
     if (!user) return
     const today = new Date().toISOString().slice(0, 10)
-    try {
-      await deleteDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
-      alert('✅ ひだまりの本日利用制限をリセットしました')
-    } catch (err) {
-      alert(`リセットできませんでした: ${err.message}`)
-    }
+    setHidamariResetMsg('リセット中…')
+    deleteDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
+      .then(() => {
+        setHidamariResetMsg('✅ リセットしました')
+        setTimeout(() => setHidamariResetMsg(''), 2500)
+      })
+      .catch(err => {
+        setHidamariResetMsg(`❌ ${err.code}`)
+        setTimeout(() => setHidamariResetMsg(''), 3000)
+      })
   }
 
   const addTestStaff = async () => {
@@ -278,7 +283,7 @@ export default function Settings() {
       {tab==='roles'    && <RolesTab    staffList={staffList} updateRole={updateRole} devMode={devMode} role={role}/>}
       {tab==='facility' && <FacilityTab />}
       {tab==='records'  && <RecordsTab  spreadsheetId={spreadsheetId}/>}
-      {tab==='dev'      && <DevTab      devMode={devMode} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode} addTestStaff={addTestStaff} onResetHidamari={resetHidamari}/>}
+      {tab==='dev'      && <DevTab      devMode={devMode} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode} addTestStaff={addTestStaff} onResetHidamari={resetHidamari} hidamariResetMsg={hidamariResetMsg}/>}
 
       <button onClick={signOut}
         style={{ width:'100%', padding:'13px', borderRadius:14, border:`1.5px solid ${C.coral}44`, background:C.coralLight, fontSize:14, fontWeight:700, color:C.coral, cursor:'pointer', fontFamily:FONT, marginTop:14 }}>
@@ -587,7 +592,7 @@ function FacilityTab() {
   )
 }
 
-function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode, addTestStaff, onResetHidamari }) {
+function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode, addTestStaff, onResetHidamari, hidamariResetMsg }) {
   return devMode ? (
     <div style={{ background:C.coralLight, borderRadius:18, padding:20, border:`1.5px solid ${C.coral}44` }}>
       <div style={{ fontSize:16, fontWeight:800, color:'#CC5040', marginBottom:12 }}>⚠️ 開発者モード 有効中</div>
@@ -596,8 +601,8 @@ function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode
         ＋「テスト 職員」をFirestoreに追加する
       </button>
       <button onClick={onResetHidamari}
-        style={{ width:'100%', padding:'12px', borderRadius:12, border:`1.5px solid ${C.amber}`, background:C.amberLight, fontSize:14, fontWeight:700, color:'#B07800', cursor:'pointer', fontFamily:FONT, marginBottom:10 }}>
-        ☀️ ひだまりの本日利用制限をリセット（テスト用）
+        style={{ width:'100%', padding:'12px', borderRadius:12, border:`1.5px solid ${C.amber}`, background:C.amberLight, fontSize:14, fontWeight:700, color: hidamariResetMsg?.startsWith('✅') ? C.primaryDark : hidamariResetMsg?.startsWith('❌') ? C.coral : '#B07800', cursor:'pointer', fontFamily:FONT, marginBottom:10, transition:'color .2s' }}>
+        {hidamariResetMsg || '☀️ ひだまりの本日利用制限をリセット（テスト用）'}
       </button>
       <button onClick={clearDevMode}
         style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', background:'#CC5040', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
