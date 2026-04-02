@@ -520,7 +520,6 @@ function RecordsTab({ spreadsheetId }) {
 // ─── 施設設定タブ ─────────────────────────────────────────────
 function FacilityTab() {
   const [emails,  setEmails]  = useState('')
-  const [saving,  setSaving]  = useState(false)
   const [msg,     setMsg]     = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -533,21 +532,17 @@ function FacilityTab() {
       .finally(() => setLoading(false))
   }, [])
 
-  const save = async () => {
-    setSaving(true)
+  const save = () => {
     const list = emails.split(/[\n,]+/).map(e => e.trim()).filter(Boolean)
-    try {
-      await setDoc(
-        doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'),
-        { adminEmails: list },
-        { merge: true }
-      )
-      setMsg(`✅ 保存しました（${list.length}件）`)
-      setTimeout(() => setMsg(''), 3000)
-    } catch (err) {
-      setMsg(`❌ ${err.message}`)
-    }
-    setSaving(false)
+    // ★ UIを即時更新（Firestoreの応答を待たない）
+    setMsg(`✅ 保存しました（${list.length}件）`)
+    setTimeout(() => setMsg(''), 3000)
+    // バックグラウンドで保存（失敗してもコンソールのみ）
+    setDoc(
+      doc(db, 'facilities', FACILITY_ID, 'config', 'hidamari'),
+      { adminEmails: list },
+      { merge: true }
+    ).catch(err => console.warn('[FacilityTab] save failed:', err.code))
   }
 
   if (loading) return <div style={{ color:C.sub, fontSize:14, padding:16 }}>読み込み中…</div>
@@ -584,9 +579,9 @@ function FacilityTab() {
         </div>
       )}
 
-      <button onClick={save} disabled={saving}
-        style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', background:saving?C.bg:C.primary, fontSize:14, fontWeight:700, color:saving?C.muted:'#fff', cursor:saving?'default':'pointer', fontFamily:FONT }}>
-        {saving ? '保存中…' : '保存する'}
+      <button onClick={save}
+        style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', background:C.primary, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', fontFamily:FONT }}>
+        保存する
       </button>
     </div>
   )
@@ -619,6 +614,8 @@ function DevTab({ devMode, pwInput, setPwInput, pwError, verifyDev, clearDevMode
         <div style={{ background:C.coralLight, borderRadius:9, padding:'8px 12px', marginBottom:11, fontSize:13, color:C.coral }}>{pwError}</div>
       )}
       <form onSubmit={e => { e.preventDefault(); verifyDev() }} style={{ margin:0 }}>
+      {/* アクセシビリティ要件：パスワードフォームにはユーザー名フィールドが必要 */}
+      <input type="text" autoComplete="username" style={{ display:'none' }} readOnly tabIndex={-1} />
       <input type="password" autoComplete="current-password" value={pwInput}
         onChange={e => setPwInput(e.target.value)}
         placeholder="開発者パスワード"
