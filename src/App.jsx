@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from './firebase'
 import { useAuth } from './contexts/AuthContext'
@@ -6,15 +6,17 @@ import { useSync } from './hooks/useSync'
 import { FONT, C } from './theme'
 import { scheduleDailyReport } from './utils/sheets'
 import Login    from './screens/Login'
+import Home     from './screens/Home'
+import Calendar from './screens/Calendar'
+import Sessions from './screens/Sessions'
+import IdeaPost from './screens/IdeaPost'
+import Hidamari from './screens/Hidamari'
+import Settings from './screens/Settings'
 import BottomNav from './components/BottomNav'
 import SideNav   from './components/SideNav'
 
-const Home     = lazy(() => import('./screens/Home'))
-const Calendar = lazy(() => import('./screens/Calendar'))
-const Sessions = lazy(() => import('./screens/Sessions'))
-const IdeaPost = lazy(() => import('./screens/IdeaPost'))
-const Hidamari = lazy(() => import('./screens/Hidamari'))
-const Settings = lazy(() => import('./screens/Settings'))
+// ★ 全画面を最初から読み込む（lazy廃止）
+// タブ切り替えでアンマウントしないため
 
 function useIsDesktop() {
   const [is, setIs] = useState(() => window.innerWidth >= 768)
@@ -26,16 +28,29 @@ function useIsDesktop() {
   return is
 }
 
-function ScreenLoader() {
+// ★ 全タブを常時マウントし、非アクティブなタブはdisplay:noneで隠す
+// → タブ切り替えで入力内容・Firestoreリスナー・状態がすべて保持される
+function KeepAliveScreens({ tab, setTab }) {
+  const TABS = ['home','calendar','sessions','ideas','hidamari','settings']
+  const screens = {
+    home:     <Home     onNavigate={setTab}/>,
+    calendar: <Calendar />,
+    sessions: <Sessions />,
+    ideas:    <IdeaPost />,
+    hidamari: <Hidamari />,
+    settings: <Settings />,
+  }
   return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'60vh' }}>
-      <div style={{ width:22, height:22, borderRadius:'50%', border:`3px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .6s linear infinite' }}/>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
+    <>
+      {TABS.map(id => (
+        <div key={id} style={{ display: tab === id ? 'flex' : 'none', flexDirection:'column', height:'100%' }}>
+          {screens[id]}
+        </div>
+      ))}
+    </>
   )
 }
 
-// 管理者権限チェック用の簡易表示
 function RoleBadge({ role }) {
   if (!role || role === 'staff') return null
   const MAP = { developer:'開発者', admin:'責任者', sub_admin:'副責任者', editor:'編集者' }
@@ -73,17 +88,6 @@ export default function App() {
     return scheduleDailyReport(getGoogleToken, getDataFn)
   }, [user, getGoogleToken])
 
-  // 使いそうな画面をバックグラウンドでプリロード
-  useEffect(() => {
-    if (!user) return
-    const t = setTimeout(() => {
-      import('./screens/Calendar')
-      import('./screens/Sessions')
-      import('./screens/Settings')
-    }, 1500)
-    return () => clearTimeout(t)
-  }, [user])
-
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:C.bg, fontFamily:FONT }}>
       <div style={{ textAlign:'center' }}>
@@ -95,19 +99,7 @@ export default function App() {
 
   if (!user) return <Login />
 
-  const screens = {
-    home:     <Home     onNavigate={setTab}/>,
-    calendar: <Calendar />,
-    sessions: <Sessions />,
-    ideas:    <IdeaPost />,
-    hidamari: <Hidamari />,
-    settings: <Settings />,
-  }
-
-  // 同期バー
   const SyncBar = () => {
-    // 管理者のみ「情報を更新」ボタンを表示
-    // 一般職員はバーなし
     if (!can.isAdminOrAbove()) return null
     return (
       <div style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 14px', background:C.card, borderBottom:`1px solid ${C.border}`, fontSize:11, color:C.sub, flexShrink:0 }}>
@@ -128,6 +120,7 @@ export default function App() {
     hidamari:'☀️ こころのひだまり', settings:'⚙️ 設定',
   }
 
+  // PC レイアウト
   if (isDesktop) {
     return (
       <div style={{ display:'flex', height:'100vh', background:C.bg, fontFamily:FONT, overflow:'hidden' }}>
@@ -141,23 +134,20 @@ export default function App() {
             </div>
           </div>
           <SyncBar />
-          <div style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:['calendar','hidamari'].includes(tab)?0:'20px 28px' }}>
-            <Suspense fallback={<ScreenLoader/>}>
-              {screens[tab] ?? <Home onNavigate={setTab}/>}
-            </Suspense>
+          <div style={{ flex:1, overflowY:'auto', overflowX:'hidden' }}>
+            <KeepAliveScreens tab={tab} setTab={setTab} />
           </div>
         </main>
       </div>
     )
   }
 
+  // スマートフォン レイアウト
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:C.bg, fontFamily:FONT, maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <SyncBar />
-      <div style={{ flex:1, overflowY:'auto', overflowX:'hidden' }}>
-        <Suspense fallback={<ScreenLoader/>}>
-          {screens[tab] ?? <Home onNavigate={setTab}/>}
-        </Suspense>
+      <div style={{ flex:1, overflow:'hidden' }}>
+        <KeepAliveScreens tab={tab} setTab={setTab} />
       </div>
       <BottomNav active={tab} setActive={setTab} />
     </div>
