@@ -21,6 +21,9 @@ export default async function handler(req, res) {
   const RESEND_API_KEY    = process.env.RESEND_API_KEY
   const PROJECT_ID        = process.env.VITE_FIREBASE_PROJECT_ID || 'copelplus-higashikurume'
   const FACILITY_ID       = 'higashikurume'
+  // ★ 環境変数で直接設定（カンマ区切り）→ 確実に届く
+  const FIXED_ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '')
+    .split(',').map(e => e.trim()).filter(Boolean)
 
   if (!RESEND_API_KEY) return res.status(500).json({ error: 'RESEND_API_KEY が未設定です' })
 
@@ -31,41 +34,42 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Firebase token required' })
   }
 
-  // ─── ② Firestore REST API で施設設定（通知先メール）を取得 ────
-  let adminEmails = []
-  try {
-    // まず施設設定の手動登録メールを確認
-    const configRes = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/config/hidamari`,
-      { headers:{ Authorization:`Bearer ${idToken}` } }
-    )
-    if (configRes.ok) {
-      const configData = await configRes.json()
-      const arr = configData.fields?.adminEmails?.arrayValue?.values || []
-      adminEmails = arr.map(v => v.stringValue).filter(Boolean)
-    }
-  } catch (err) {
-    console.warn('[hidamari] config fetch error:', err.message)
-  }
+  // ─── ① 環境変数に設定されたアドレスを最優先 ─────────────────
+  let adminEmails = [...FIXED_ADMIN_EMAILS]
 
-  // ─── ③ 手動登録がなければ staff の role から取得 ──────────────
-  if (!adminEmails.length) {
+  // ─── ② Firestoreから追加取得（IDトークンがあれば） ───────────
+  if (!adminEmails.length || idToken) {
     try {
-      const staffRes = await fetch(
-        `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/staff`,
+      // 施設設定の手動登録メールを確認
+      const configRes = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/config/hidamari`,
         { headers:{ Authorization:`Bearer ${idToken}` } }
       )
-      if (staffRes.ok) {
-        const staffData = await staffRes.json()
-        const docs = staffData.documents || []
-        const ADMIN_ROLES = ['admin','sub_admin','developer']
-        adminEmails = docs
-          .filter(d => ADMIN_ROLES.includes(d.fields?.role?.stringValue))
-          .map(d => d.fields?.email?.stringValue)
-          .filter(Boolean)
+      if (configRes.ok) {
+        const d = await configRes.json()
+        const arr = d.fields?.adminEmails?.arrayValue?.values || []
+        const configEmails = arr.map(v => v.stringValue).filter(Boolean)
+        configEmails.forEach(e => { if (!adminEmails.includes(e)) adminEmails.push(e) })
       }
-    } catch (err) {
-      console.warn('[hidamari] staff fetch error:', err.message)
+    } catch (_) {}
+
+    // staffコレクションからroleがadmin以上のメールを取得
+    if (!adminEmails.length) {
+      try {
+        const staffRes = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/facilities/${FACILITY_ID}/staff`,
+          { headers:{ Authorization:`Bearer ${idToken}` } }
+        )
+        if (staffRes.ok) {
+          const d = await staffRes.json()
+          const ADMIN_ROLES = ['admin','sub_admin','developer']
+          ;(d.documents || [])
+            .filter(doc => ADMIN_ROLES.includes(doc.fields?.role?.stringValue))
+            .map(doc => doc.fields?.email?.stringValue)
+            .filter(Boolean)
+            .forEach(e => { if (!adminEmails.includes(e)) adminEmails.push(e) })
+        }
+      } catch (_) {}
     }
   }
 

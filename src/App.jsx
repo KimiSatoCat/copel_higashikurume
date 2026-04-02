@@ -50,7 +50,7 @@ function KeepAliveScreens({ tab, setTab, visited }) {
         if (!visited[id]) return null  // 未訪問はマウントしない
         const Comp = SCREEN_MAP[id]
         return (
-          <div key={id} style={{ display:tab===id?'flex':'none', flexDirection:'column', height:'100%', overflow:'hidden' }}>
+          <div key={id} style={{ display:tab===id?'flex':'none', flexDirection:'column', height:'100%', overflowY:'auto', overflowX:'hidden' }}>
             {id === 'home'
               ? <Home onNavigate={setTab}/>
               : <Comp />
@@ -145,7 +145,7 @@ export default function App() {
             </div>
           </div>
           <SyncBar />
-          <div style={{ flex:1, overflow:'hidden' }}>
+          <div style={{ flex:1, overflow:'hidden', position:'relative' }}>
             <KeepAliveScreens tab={tab} setTab={setTab} visited={visited} />
           </div>
         </main>
@@ -156,7 +156,7 @@ export default function App() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:C.bg, fontFamily:FONT, maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <SyncBar />
-      <div style={{ flex:1, overflow:'hidden' }}>
+      <div style={{ flex:1, overflow:'hidden', position:'relative' }}>
         <KeepAliveScreens tab={tab} setTab={setTab} visited={visited} />
       </div>
       <BottomNav active={tab} setActive={setTab} />
