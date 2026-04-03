@@ -121,21 +121,29 @@ export default function Home({ onNavigate }) {
         <div style={{ background:C.card, borderRadius:20, padding:14, border:`1.5px solid ${C.border}` }}>
           <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:12 }}>🧩 きょうのコマ割り当て</div>
           {sessions.map((s, i) => {
-            const sc = s.children?.[0]?.status === '来所済み' ? { bg:C.primaryLight, c:C.primaryDark }
-              : s.children?.[0]?.status === '欠席'     ? { bg:C.coralLight,   c:'#CC5040' }
+            // ★ cards形式に対応（旧形式との互換性あり）
+            const cards = s.cards || (s.staffId ? [{
+              staffName: s.staffName, children: s.children || []
+            }] : [])
+            const firstStatus = cards[0]?.children?.[0]?.status
+            const sc = firstStatus === '来所済み' ? { bg:C.primaryLight, c:C.primaryDark }
+              : firstStatus === '欠席' ? { bg:C.coralLight, c:'#CC5040' }
               : { bg:C.amberLight, c:'#B07800' }
-            const kids = (s.children||[]).map(c=>c.childName).filter(Boolean).join('・')
+            // 担当職員名一覧
+            const staffNames = cards.map(c => c.staffName).filter(Boolean).join('・') || '未設定'
+            // 子ども名一覧（全カードから）
+            const kids = cards.flatMap(c => (c.children||[]).map(ch => ch.childName)).filter(Boolean).join('・') || '未設定'
             return (
               <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 0', borderBottom:i<sessions.length-1?`1px solid ${C.divider}`:'none' }}>
                 <div style={{ width:26, height:26, borderRadius:7, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:C.primary, flexShrink:0 }}>{i+1}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:12, color:C.sub }}>{s.time}</div>
                   <div style={{ fontSize:14, fontWeight:600, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {s.staffName||'未設定'} → {kids||'未設定'}
+                    {staffNames} → {kids}
                   </div>
                 </div>
                 <div style={{ background:sc.bg, color:sc.c, borderRadius:99, padding:'4px 10px', fontSize:12, fontWeight:600, flexShrink:0 }}>
-                  {s.children?.[0]?.status||'予定'}
+                  {firstStatus||'予定'}
                 </div>
               </div>
             )
