@@ -4,6 +4,7 @@ import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth'
 import { db, FACILITY_ID, auth, googleProvider } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT, SHIFT, DOW_JA } from '../theme'
+import { cacheGet, cacheSet } from '../utils/cache'
 
 const SHIFT_OPTS = ['in','late','ext','off']
 
@@ -44,8 +45,9 @@ export default function Calendar() {
 
   const [year,      setYear]      = useState(today.getFullYear())
   const [month,     setMonth]     = useState(today.getMonth() + 1)
-  const [staffList, setStaffList] = useState([])
-  const [schedule,  setSchedule]  = useState({ shifts:{}, events:{} })
+  const [staffList, setStaffList] = useState(() => cacheGet('staffList') || [])
+  const [schedule,  setSchedule]  = useState(() => cacheGet(`schedule_${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || { shifts:{}, events:{} })
+  const [loading,   setLoading]   = useState(true)
   const [editMode,  setEditMode]  = useState(false)
   const [modalDay,  setModalDay]  = useState(null)
   const [eventInput,setEventInput]= useState('')
@@ -64,10 +66,15 @@ export default function Calendar() {
 
   useEffect(() => {
     if (unsubRef.current) unsubRef.current()
+    // 月切り替え時：キャッシュがあれば即時表示、なければローディング
+    const cached = cacheGet(`schedule_${ym}`)
+    if (!cached) setLoading(true)
+    else setSchedule(cached)
 
     getDocs(collection(db,'facilities',FACILITY_ID,'staff')).then(snap => {
       const list = snap.docs.filter(d => d.data().active).map(d => ({ id:d.id, ...d.data() }))
       setStaffList(list)
+      cacheSet('staffList', list)  // ★ キャッシュ保存
 
       const map = {}
       list.forEach(s => {
@@ -81,16 +88,17 @@ export default function Calendar() {
         }
       })
       setBdayMap(map)
-    })
+    }).catch(() => {})
 
     const ref = doc(db,'facilities',FACILITY_ID,'schedules',ym)
     unsubRef.current = onSnapshot(ref,
       snap => {
         const data = snap.exists() ? snap.data() : { shifts:{}, events:{} }
+        cacheSet(`schedule_${ym}`, data)  // ★ キャッシュ保存
+        setLoading(false)
         // ★ pendingRef の変更を保護してからstateを更新
         setSchedule(prev => {
           const merged = { ...data, shifts: { ...(data.shifts || {}) } }
-          // ローカルで変更中のセルは上書きしない
           Object.entries(pendingRef.current).forEach(([staffId, days]) => {
             merged.shifts[staffId] = { ...(merged.shifts[staffId] || {}), ...days }
           })
@@ -281,30 +289,73 @@ ${staffRows}
 </html>`
   }
 
-  // ─── Slack用シフト表テキスト生成 ─────────────────────────
+  // ─── Slack用シフト表生成（週ごとブロック分割） ───────────
   const generateSlackBlocks = () => {
     const sh = schedule.shifts || {}
-    const LABEL = { in:'○', late:'遅', ext:'外', off:'ー' }
-    // ヘッダー行（日付）
-    let header = `*コペルプラス 東久留米教室　${year}年${month}月　シフト表*\n`
-    header += `作成日時：${new Date().toLocaleString('ja-JP')}\n\n`
-    header += '```\n'
-    // 列幅調整
-    const namePad = 10
-    const dayHeader = days.map(d => String(d).padStart(2)).join(' ')
-    header += '職員名'.padEnd(namePad) + ' ' + dayHeader + '\n'
-    header += '─'.repeat(namePad + days.length * 3) + '\n'
+    const EMOJI = { in:'🟢', late:'🟡', ext:'🟠', off:'　' }
+    const SHORT = { in:'出勤', late:'遅番', ext:'外勤', off:'ー' }
+    const DOW   = ['日','月','火','水','木','金','土']
 
-    staffList.forEach(s => {
-      const name = (s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name || '').slice(0, namePad).padEnd(namePad)
-      const row = days.map(d => {
-        const type = sh[s.id]?.[d] || 'off'
-        return LABEL[type].padStart(2)
-      }).join(' ')
-      header += name + ' ' + row + '\n'
+    // 週ごとに分割
+    const weeks = []
+    let week = []
+    days.forEach(d => {
+      week.push(d)
+      const dow = new Date(year, month-1, d).getDay()
+      if (dow === 6 || d === days[days.length-1]) {
+        weeks.push([...week]); week = []
+      }
     })
-    header += '```'
-    return header
+
+    const blocks = [
+      { type:'header', text:{ type:'plain_text', text:`📅 ${year}年${month}月 シフト表`, emoji:true } },
+      { type:'context', elements:[{ type:'mrkdwn', text:`コペルプラス 東久留米教室　作成：${new Date().toLocaleString('ja-JP')}` }] },
+      { type:'divider' },
+    ]
+
+    weeks.forEach(weekDays => {
+      // 日付ヘッダー行
+      const headerText = '`職員名`　' + weekDays.map(d => {
+        const dow = new Date(year, month-1, d).getDay()
+        const isHol = isHoliday(year, month, d)
+        const mark = dow===0||isHol ? '🔴' : dow===6 ? '🔵' : dow===3 ? '🟡' : ''
+        return `\`${String(d).padStart(2)}/${DOW[dow]}\`${mark}`
+      }).join(' ')
+
+      blocks.push({ type:'section', text:{ type:'mrkdwn', text: headerText } })
+
+      // 職員ごとの行
+      staffList.forEach(s => {
+        const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name || ''
+        const hasShift = weekDays.some(d => (sh[s.id]?.[d] || 'off') !== 'off')
+        if (!hasShift) return  // 全休の週はスキップ
+
+        const cells = weekDays.map(d => {
+          const type = sh[s.id]?.[d] || 'off'
+          return EMOJI[type]
+        }).join('　')
+
+        const legend = weekDays
+          .filter(d => (sh[s.id]?.[d] || 'off') !== 'off')
+          .map(d => `${d}日:${SHORT[sh[s.id][d]]}`)
+          .join(', ')
+
+        blocks.push({
+          type: 'section',
+          text: { type:'mrkdwn', text:`*${name}*　${cells}\n　_${legend}_` }
+        })
+      })
+
+      blocks.push({ type:'divider' })
+    })
+
+    // 凡例
+    blocks.push({
+      type: 'context',
+      elements: [{ type:'mrkdwn', text:'🟢出勤　🟡遅番　🟠外勤　⚪お休み　🔴日祝　🔵土曜　🟡水曜' }]
+    })
+
+    return blocks
   }
 
   // ─── PDF ダウンロード ───────────────────────────────────
@@ -336,7 +387,11 @@ ${staffRows}
           'Content-Type': 'application/json',
           'x-internal-secret': 'copelplus_internal_2026',
         },
-        body: JSON.stringify({ shiftText: text, date: `${year}年${month}月`, isShift: true }),
+        body: JSON.stringify({
+        shiftBlocks: generateSlackBlocks(),
+        date: `${year}年${month}月`,
+        isShift: true,
+      }),
       })
       const result = await res.json()
       if (result.success) {
@@ -389,7 +444,14 @@ ${staffRows}
       </div>
 
       {/* ─── カレンダー本体 ─── */}
-      <div style={{ flex:1, overflowX:'auto', overflowY:'auto', padding:'5px 3px 4px' }}>
+      <div style={{ flex:1, overflowX:'auto', overflowY:'auto', padding:'5px 3px 4px', position:'relative' }}>
+        {loading && (
+          <div style={{ position:'absolute', inset:0, background:'rgba(255,248,242,0.85)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10, gap:10 }}>
+            <div style={{ width:18, height:18, borderRadius:'50%', border:`3px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .7s linear infinite' }}/>
+            <span style={{ fontSize:13, color:C.sub, fontFamily:FONT }}>読み込み中…</span>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        )}
         <div style={{ minWidth: 54 + 38*daysInMonth }}>
 
           {/* イベント行 */}

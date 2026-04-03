@@ -21,11 +21,11 @@ export default async function handler(req, res) {
   const PROJECT_ID        = process.env.VITE_FIREBASE_PROJECT_ID || 'copelplus-higashikurume'
   const FACILITY_ID_ENV   = 'higashikurume'
 
-  const { summary, date, staffName, shiftText, isShift } = req.body
-  if (!summary && !shiftText) return res.status(400).json({ error: 'summary または shiftText は必須です' })
+  const { summary, date, staffName, shiftText, shiftBlocks, isShift } = req.body
+  if (!summary && !shiftText && !shiftBlocks) return res.status(400).json({ error: 'summary または shiftBlocks は必須です' })
 
   // ─── シフト表共有モード ─────────────────────────────────
-  if (isShift && shiftText) {
+  if (isShift && (shiftBlocks || shiftText)) {
     if (!SHIFT_WEBHOOK_URL) {
       return res.status(500).json({ error: 'SHIFT_WEBHOOK_URL が未設定です' })
     }
@@ -36,20 +36,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           username: 'シフト管理',
           icon_emoji: ':calendar:',
-          blocks: [
-            {
-              type: 'header',
-              text: { type: 'plain_text', text: `📅 ${date} シフト表`, emoji: true }
-            },
-            {
-              type: 'section',
-              text: { type: 'mrkdwn', text: shiftText }
-            },
-            {
-              type: 'context',
-              elements: [{ type: 'mrkdwn', text: 'コペルプラス 東久留米教室 勤務管理アプリより自動送信' }]
-            }
-          ]
+          blocks: shiftBlocks || [{ type:'section', text:{ type:'mrkdwn', text: shiftText } }]
         }),
       })
       if (!slackRes.ok) {

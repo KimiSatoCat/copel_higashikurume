@@ -3,6 +3,7 @@ import { doc, onSnapshot, setDoc, collection, getDocs } from 'firebase/firestore
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT, DOW_JA } from '../theme'
+import { cacheGet, cacheSet } from '../utils/cache'
 
 const STATUS_CFG = {
   '来所済み': { bg: C.primaryLight, c: C.primaryDark, border: C.primary },
@@ -40,27 +41,38 @@ export default function Sessions() {
   const dateKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`
   const label   = `${today.getFullYear()}年${today.getMonth()+1}月${today.getDate()}日（${DOW_JA[today.getDay()]}）`
 
-  const [slots,     setSlots]     = useState(makeSlots())
-  const [staffList, setStaffList] = useState([])
-  const [children,  setChildren]  = useState([])
+  const [slots,     setSlots]     = useState(() => cacheGet(`sessions_${dateKey}`) || makeSlots())
+  const [staffList, setStaffList] = useState(() => cacheGet('staffList') || [])
+  const [children,  setChildren]  = useState(() => cacheGet('children') || [])
+  const [loading,   setLoading]   = useState(!cacheGet(`sessions_${dateKey}`))
   const [memoInput, setMemoInput] = useState({})
 
   // ─── 初期ロード ─────────────────────────────────────────
   useEffect(() => {
     getDocs(collection(db,'facilities',FACILITY_ID,'staff'))
-      .then(s => setStaffList(s.docs.filter(d=>d.data().active!==false).map(d=>({id:d.id,...d.data()}))))
+      .then(s => {
+        const list = s.docs.filter(d=>d.data().active!==false).map(d=>({id:d.id,...d.data()}))
+        setStaffList(list)
+        cacheSet('staffList', list)
+      })
       .catch(()=>{})
 
     getDocs(collection(db,'facilities',FACILITY_ID,'children'))
-      .then(s => setChildren(s.docs.map(d=>({id:d.id,...d.data()}))))
+      .then(s => {
+        const list = s.docs.map(d=>({id:d.id,...d.data()}))
+        setChildren(list)
+        cacheSet('children', list)
+      })
       .catch(()=>{})
 
     const unsub = onSnapshot(
       doc(db,'facilities',FACILITY_ID,'sessions',dateKey),
       snap => {
+        setLoading(false)
         if (!snap.exists()) return
         const saved = snap.data().slots
         if (!saved) return
+        cacheSet(`sessions_${dateKey}`, saved)  // ★ キャッシュ保存
         setSlots(prev => prev.map((s, i) => {
           const sv = saved[i]
           if (!sv) return s
@@ -211,6 +223,14 @@ export default function Sessions() {
       <div style={{ fontSize:12, color:C.primary, background:C.primaryLight, borderRadius:9, padding:'7px 12px', marginBottom:16 }}>
         ✏️ 全員が前日に入力できます。同じコマに複数の担当者を追加できます。
       </div>
+
+      {loading && (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'16px 0', color:C.sub }}>
+          <div style={{ width:18, height:18, borderRadius:'50%', border:`2px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .7s linear infinite', flexShrink:0 }}/>
+          <span style={{ fontSize:14 }}>読み込み中…</span>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      )}
 
       {slots.map((slot, si) => (
         <div key={si} style={{ background:C.card, borderRadius:20, padding:14, marginBottom:14, border:`1.5px solid ${C.border}` }}>

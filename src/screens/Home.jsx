@@ -3,6 +3,7 @@ import { collection, doc, onSnapshot, getDocs } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT, DOW_JA } from '../theme'
+import { cacheGet, cacheSet } from '../utils/cache'
 
 export default function Home({ onNavigate }) {
   const { profile, user } = useAuth()
@@ -12,10 +13,11 @@ export default function Home({ onNavigate }) {
   const dateKey = `${ym}-${String(d).padStart(2,'0')}`
   const label   = `${y}年${m}月${d}日（${DOW_JA[today.getDay()]}）`
 
-  const [staffList, setStaffList] = useState([])
-  const [schedule,  setSchedule]  = useState({})
-  const [sessions,  setSessions]  = useState([])
+  const [staffList, setStaffList] = useState(() => cacheGet('staffList') || [])
+  const [schedule,  setSchedule]  = useState(() => cacheGet(`schedule_${ym}`) || {})
+  const [sessions,  setSessions]  = useState(() => cacheGet(`sessions_${dateKey}`) || [])
   const [upcoming,  setUpcoming]  = useState([])
+  const [loading,   setLoading]   = useState(!cacheGet(`sessions_${dateKey}`))
 
   useEffect(() => {
     getDocs(collection(db,'facilities',FACILITY_ID,'staff')).then(s => {
@@ -40,13 +42,24 @@ export default function Home({ onNavigate }) {
 
     const u1 = onSnapshot(
       doc(db,'facilities',FACILITY_ID,'schedules',ym),
-      snap => setSchedule(snap.exists() ? snap.data() : {}),
+      snap => {
+        const data = snap.exists() ? snap.data() : {}
+        setSchedule(data)
+        cacheSet(`schedule_${ym}`, data)
+      },
       err  => console.warn('[Home] schedule:', err.message)
     )
     const u2 = onSnapshot(
       doc(db,'facilities',FACILITY_ID,'sessions',dateKey),
-      snap => { if (snap.exists()) setSessions(snap.data().slots || []) },
-      err  => console.warn('[Home] sessions:', err.message)
+      snap => {
+        if (snap.exists()) {
+          const slots = snap.data().slots || []
+          setSessions(slots)
+          cacheSet(`sessions_${dateKey}`, slots)
+        }
+        setLoading(false)
+      },
+      err  => { console.warn('[Home] sessions:', err.message); setLoading(false) }
     )
     return () => { u1(); u2() }
   }, [ym, dateKey])
@@ -117,7 +130,13 @@ export default function Home({ onNavigate }) {
       </div>
 
       {/* 今日のコマ */}
-      {sessions.length > 0 && (
+      {loading ? (
+        <div style={{ background:C.card, borderRadius:20, padding:20, border:`1.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:18, height:18, borderRadius:'50%', border:`2px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .7s linear infinite', flexShrink:0 }}/>
+          <span style={{ fontSize:14, color:C.sub }}>読み込み中…</span>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      ) : sessions.length > 0 && (
         <div style={{ background:C.card, borderRadius:20, padding:14, border:`1.5px solid ${C.border}` }}>
           <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:12 }}>🧩 きょうのコマ割り当て</div>
           {sessions.map((s, i) => {
