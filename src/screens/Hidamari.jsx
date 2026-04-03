@@ -4,17 +4,13 @@ import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
 
-// Claude API はプロキシ経由
 async function callClaude({ system, messages, max_tokens = 1000 }) {
   const res = await fetch('/api/claude-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens, system, messages }),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error?.message || `API error ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`Claude API error ${res.status}`)
   const data = await res.json()
   return data.content?.find(b => b.type === 'text')?.text || ''
 }
@@ -22,28 +18,19 @@ async function callClaude({ system, messages, max_tokens = 1000 }) {
 const SYSTEM_PROMPT = `あなたは「こころのひだまり」というAIカウンセラーです。コペルプラス 東久留米教室で働く職員をやさしく温かく支える存在です。
 
 以下の順番で、500〜600字を目安に返答してください：
-①受容：相手の気持ちをそのまま、ありのまま受け止める
-②共感：「それはつらかったですね」など、感情に名前をつける
-③正常化：そう感じることはあたり前だと伝え、自分を責めなくていいと伝える
-④小さな力を認める：今日ここに来て気持ちを吐き出せたこと自体をちゃんとほめる
+①受容：相手の気持ちをそのまま受け止める
+②共感：感情に名前をつける
+③正常化：そう感じることはあたり前だと伝える
+④小さな力を認める：ここに来て話してくれたこと自体をほめる
 
-守ること：
-・批判・評価・アドバイスは一切しない
-・解決策を押しつけない
-・「でも」「しかし」で否定しない
-・ひらがなを多めに使い、やさしくやわらかい文体で
-・相手が「ここに来てよかった」と感じられる終わり方にする`
+守ること：批判・評価・アドバイスをしない。解決策を押しつけない。ひらがな多め、やわらかい文体。`
 
-const SUMMARY_PROMPT = `以下は職員とAIカウンセラーの会話内容です。
-責任者向けに、以下の形式で要約してください：
-
-・職員の名前を明記する（例：「〇〇先生は〜」）
-・具体的なエピソードも含めて記載する
-・ただし、すべての表現は誰も傷つかないやさしい言葉で書く
-  （批判・否定・決めつけをせず、「〜のようにお感じのようです」などの柔らかい表現を使う）
-・最後に「どのような関わりが考えられるか」を3点提案する
-・全体で400字以内
-
+const SUMMARY_PROMPT = `以下は職員とAIカウンセラーの会話です。責任者向けに要約してください。
+・職員の名前を明記（「〇〇先生は〜」）
+・具体的なエピソードを含める
+・やさしい言葉のみ使用（批判・否定禁止）
+・「どのような関わりが考えられるか」を3点提案
+・400字以内
 会話内容：`
 
 export default function Hidamari() {
@@ -53,17 +40,20 @@ export default function Hidamari() {
   const [msgs,    setMsgs]    = useState([
     { role:'ai', text:'こんにちは 🌤️\n\nここは、あなただけの安心できる場所です。\n今日、こころにたまっていることを、なんでも話してくださいね。\n\nどんな気持ちも、ちゃんと受け止めます。' }
   ])
-  const [input,   setInput]   = useState('')
-  const [loading, setLoading] = useState(false)
-  const [used,    setUsed]    = useState(false)
+  const [input,    setInput]    = useState('')
+  const [nameInput,setNameInput]= useState('')  // ★ 名前入力
+  const [loading,  setLoading]  = useState(false)
+  const [used,     setUsed]     = useState(false)
   const bottomRef = useRef()
 
   useEffect(() => {
     if (!user) return
+    // プロフィールのひらがな名を初期値に
+    if (profile?.hiraganaFirst) setNameInput(`${profile.hiraganaFirst}先生`)
     getDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
       .then(snap => { if (snap.exists()) setUsed(true) })
       .catch(() => {})
-  }, [user, today])
+  }, [user, profile, today])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -78,25 +68,24 @@ export default function Hidamari() {
     setLoading(true)
 
     try {
-      // ① 寄り添い返答
       const history = newMsgs.slice(1).map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant', content: m.text,
       }))
-      const reply = await callClaude({ system:SYSTEM_PROMPT, messages:history })
-      const finalMsgs = [...newMsgs, { role:'ai', text:reply }]
+      const reply = await callClaude({ system: SYSTEM_PROMPT, messages: history })
+      const finalMsgs = [...newMsgs, { role:'ai', text: reply }]
       setMsgs(finalMsgs)
       setUsed(true)
 
-      // ② 利用記録（Firestoreが使えるときだけ保存、失敗しても止まらない）
+      // 利用記録（失敗しても止まらない）
       setDoc(
         doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today),
         { used:true, date:today, uid:user.uid, createdAt:new Date().toISOString() }
-      ).catch(err => console.warn('[Hidamari] log save:', err.code))
+      ).catch(() => {})
 
-      // ③ 要約生成・メール送信（バックグラウンド）
-      sendSummaryToServer(finalMsgs).catch(err =>
-        console.error('[Hidamari] summary error:', err.message)
-      )
+      // Slack通知（バックグラウンド）
+      sendToSlack(finalMsgs, nameInput.trim() || profile?.hiraganaFirst
+        ? `${profile.hiraganaFirst}先生` : profile?.name || '（名前未入力）'
+      ).catch(err => console.warn('[Hidamari] Slack:', err.message))
 
     } catch (err) {
       console.error('[Hidamari]', err)
@@ -105,60 +94,67 @@ export default function Hidamari() {
     setLoading(false)
   }
 
-  const sendSummaryToServer = async (conversation) => {
-    const name = profile?.hiraganaFirst ? `${profile.hiraganaFirst}先生` : profile?.name || '職員'
-
-    const convText = conversation
-      .slice(1)
-      .map(m => `${m.role==='user' ? name : 'AI'}：${m.text}`)
+  const sendToSlack = async (conversation, displayName) => {
+    const convText = conversation.slice(1)
+      .map(m => `${m.role==='user' ? displayName : 'AI'}：${m.text}`)
       .join('\n\n')
 
-    // ④ AI 要約生成
     const summary = await callClaude({
       system: '',
       messages: [{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }],
       max_tokens: 600,
     })
 
-    // ⑤ Firestoreに保存（管理者が後から確認できるように）
+    // Firestoreに要約を保存（管理者閲覧用）
     setDoc(
       doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
-      { summary, date:today, uid:user.uid, staffName:name, createdAt:new Date().toISOString() }
+      { summary, date:today, uid:user.uid, staffName:displayName, createdAt:new Date().toISOString() }
     ).catch(() => {})
 
-    // ⑥ ログイン中ユーザーの Firebase ID トークンを取得してサーバーに渡す
-    // サーバーがこのトークンで Firestore REST API を認証する
+    // Firebase ID トークンを取得してサーバーに渡す
     const { getAuth } = await import('firebase/auth')
-    const firebaseUser = getAuth().currentUser
     let firebaseToken = ''
-    if (firebaseUser) {
-      try { firebaseToken = await firebaseUser.getIdToken() } catch (_) {}
-    }
+    try { firebaseToken = await getAuth().currentUser?.getIdToken() || '' } catch (_) {}
 
-    // ⑦ サーバーへ送信（メール先はサーバーが Firestore REST API で取得）
     const res = await fetch('/api/send-hidamari-summary', {
       method: 'POST',
       headers: {
-        'Content-Type':        'application/json',
-        'x-internal-secret':   'copelplus_internal_2026',
-        'x-firebase-token':    firebaseToken,
+        'Content-Type':      'application/json',
+        'x-internal-secret': 'copelplus_internal_2026',
+        'x-firebase-token':  firebaseToken,
       },
-      body: JSON.stringify({ summary, date: today }),
+      body: JSON.stringify({ summary, date: today, staffName: displayName }),
     })
-
     const result = await res.json()
-    if (result.success) {
-      console.log('[Hidamari] ✅ メール送信完了 →', result.sentTo)
-    } else {
-      console.warn('[Hidamari] メール未送信:', result.reason || result.error)
-    }
+    if (result.success) console.log('[Hidamari] ✅ Slack通知完了')
+    else console.warn('[Hidamari]', result.reason || result.error)
   }
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+
+      {/* ヘッダー */}
       <div style={{ padding:'14px', background:`linear-gradient(135deg,${C.amberLight},#FFF0D0)`, borderBottom:`1.5px solid ${C.amber}33`, flexShrink:0 }}>
         <div style={{ fontSize:18, fontWeight:800, color:C.text }}>☀️ こころのひだまり</div>
         <div style={{ fontSize:13, color:C.sub, marginTop:3 }}>ここだけの、あなたの安心できる場所</div>
+
+        {/* ★ 名前入力欄 */}
+        {!used && (
+          <div style={{ marginTop:10 }}>
+            <input
+              type="text"
+              value={nameInput}
+              onChange={e => setNameInput(e.target.value)}
+              placeholder="お名前（任意）"
+              autoComplete="off"
+              style={{ width:'100%', padding:'8px 12px', borderRadius:10, border:`1.5px solid ${C.amber}66`, background:'rgba(255,255,255,0.7)', fontSize:13, fontFamily:FONT, outline:'none', color:C.text }}
+            />
+            <div style={{ fontSize:11, color:'#B07800', marginTop:3 }}>
+              ※ 入力した名前は責任者への通知に使われます
+            </div>
+          </div>
+        )}
+
         {used && (
           <div style={{ marginTop:8, background:C.coralLight, borderRadius:10, padding:'6px 12px', fontSize:13, color:C.coral }}>
             今日はもう使いました。また明日どうぞ 🌙
@@ -166,6 +162,7 @@ export default function Hidamari() {
         )}
       </div>
 
+      {/* メッセージ一覧 */}
       <div style={{ flex:1, overflowY:'auto', padding:'14px', display:'flex', flexDirection:'column', gap:12 }}>
         {msgs.map((m, i) => (
           <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:m.role==='user'?'flex-end':'flex-start' }}>
@@ -201,6 +198,7 @@ export default function Hidamari() {
         <div ref={bottomRef} />
       </div>
 
+      {/* 入力欄 */}
       <div style={{ padding:'10px 14px', background:C.card, borderTop:`1.5px solid ${C.border}`, flexShrink:0 }}>
         <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
           <textarea

@@ -40,21 +40,22 @@ function RoleBadge({ role }) {
   )
 }
 
-// ★ 遅延マウント型KeepAlive
-// - 初訪問まではマウントしない（起動時の Firestore 同時リクエストを防ぐ）
-// - 一度マウントしたら display:none で保持（状態・リスナー・入力内容が消えない）
+// 全タブを常時マウントし、非アクティブはCSSで非表示（即時切り替え）
 function KeepAliveScreens({ tab, setTab, visited }) {
   return (
     <>
+      <style>{`
+        .ka-screen { position:absolute; inset:0; overflow-y:auto; overflow-x:hidden; }
+        .ka-screen.active { opacity:1; pointer-events:auto; z-index:1; }
+        .ka-screen.inactive { opacity:0; pointer-events:none; z-index:0; }
+      `}</style>
       {ALL_TABS.map(id => {
-        if (!visited[id]) return null  // 未訪問はマウントしない
+        if (!visited[id]) return null
         const Comp = SCREEN_MAP[id]
+        const isActive = tab === id
         return (
-          <div key={id} style={{ display:tab===id?'flex':'none', flexDirection:'column', height:'100%', overflowY:'auto', overflowX:'hidden' }}>
-            {id === 'home'
-              ? <Home onNavigate={setTab}/>
-              : <Comp />
-            }
+          <div key={id} className={`ka-screen ${isActive ? 'active' : 'inactive'}`}>
+            {id === 'home' ? <Home onNavigate={setTab}/> : <Comp />}
           </div>
         )
       })}
