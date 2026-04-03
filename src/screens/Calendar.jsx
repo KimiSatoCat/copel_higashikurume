@@ -162,7 +162,7 @@ export default function Calendar() {
       let created = 0, failed = 0
       for (const [dayStr, type] of entries) {
         const d        = parseInt(dayStr)
-        const label    = type==='in'?'出勤' : type==='ext'?'外勤' : type==='late'?'遅刻' : '勤務'
+        const label    = type==='in'?'出勤' : type==='ext'?'外勤' : type==='late'?'遅番' : '勤務'
         const event    = {
           summary:  `【コペルプラス】${label}`,
           description: `コペルプラス 東久留米教室 ${label}`,

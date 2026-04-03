@@ -13,7 +13,7 @@ export const C = {
 
 export const SHIFT = {
   in:   { label: '出勤',  short: '○', bg: '#E6F5F3', color: '#3A9A88', dot: '#52BAA8' },
-  late: { label: '遅刻',  short: '遅', bg: '#FFF5E0', color: '#B07800', dot: '#FFB94A' },
+  late: { label: '遅番',  short: '遅', bg: '#FFF5E0', color: '#B07800', dot: '#FFB94A' },
   ext:  { label: '外勤',  short: '外', bg: '#FFECEA', color: '#CC5040', dot: '#FF8A75' },
   off:  { label: 'お休み',short: '－', bg: '#F5F1EC', color: '#9A908A', dot: '#C8C0B8' },
 }

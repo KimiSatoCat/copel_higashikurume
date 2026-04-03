@@ -73,8 +73,12 @@ export default function Hidamari() {
     if (profile?.hiraganaFirst) setNameInput(`${profile.hiraganaFirst}先生`)
   }, [profile])
 
-  // 0:00 になったら自動リセット
+  // 0:00自動リセット + 開発者タブからの即座リセット
   useEffect(() => {
+    // ★ 開発者タブのリセットボタンで即座反映
+    const onReset = () => setUsed(false)
+    window.addEventListener('hidamari-reset', onReset)
+
     const scheduleReset = () => {
       const now  = new Date()
       const next = new Date()
@@ -86,7 +90,10 @@ export default function Hidamari() {
       }, ms)
     }
     scheduleReset()
-    return () => clearTimeout(midnightRef.current)
+    return () => {
+      clearTimeout(midnightRef.current)
+      window.removeEventListener('hidamari-reset', onReset)
+    }
   }, [])
 
   useEffect(() => {

@@ -156,8 +156,9 @@ export default function Settings() {
   // ─── テスト職員追加 ──────────────────────────────────────
   const [hidamariResetMsg, setHidamariResetMsg] = useState('')
   const resetHidamari = () => {
-    // localStorageのひだまり使用記録を削除（Firestoreに依存しない）
     try { localStorage.removeItem('hidamari_used_date') } catch (_) {}
+    // ★ Hidamariコンポーネントに即座通知（別コンポーネントでもstateが更新される）
+    window.dispatchEvent(new Event('hidamari-reset'))
     setHidamariResetMsg('✅ リセットしました')
     setTimeout(() => setHidamariResetMsg(''), 2500)
   }
@@ -221,8 +222,7 @@ export default function Settings() {
         {acctEdit && (
           <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${C.primary}33` }}>
             <div style={{ fontSize:12, color:C.sub, marginBottom:12, lineHeight:1.6 }}>
-              ※「下の名前（ひらがな）」が「〇〇先生」として大きく表示されます。<br/>
-              フルネームはカレンダーの勤務表に連動します。
+              ※「下の名前（ひらがな）」が「〇〇先生」として大きく表示されます。
             </div>
             {[
               { key:'hiraganaFirst', label:'下の名前（ひらがな）', ph:'たろう' },
