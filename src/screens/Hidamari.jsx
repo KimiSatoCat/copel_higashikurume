@@ -1,14 +1,35 @@
 import { useState, useEffect, useRef } from 'react'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { doc, setDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
+
+// ─── ひだまり利用制限（localStorage + 0:00自動リセット） ──────────
+const LS_KEY = 'hidamari_used_date'
+
+function getTodayStr() {
+  return new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })
+    .replace(/\//g, '-')
+}
+
+function checkUsedToday() {
+  try { return localStorage.getItem(LS_KEY) === getTodayStr() } catch { return false }
+}
+
+function markUsedToday() {
+  try { localStorage.setItem(LS_KEY, getTodayStr()) } catch {}
+}
+
+// 開発者用リセット（外部から呼べるように export）
+export function resetHidamariLimit() {
+  try { localStorage.removeItem(LS_KEY) } catch {}
+}
 
 async function callClaude({ system, messages, max_tokens = 1000 }) {
   const res = await fetch('/api/claude-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens, system, messages }),
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens, system, messages }),
   })
   if (!res.ok) throw new Error(`Claude API error ${res.status}`)
   const data = await res.json()
@@ -41,19 +62,32 @@ export default function Hidamari() {
     { role:'ai', text:'こんにちは 🌤️\n\nここは、あなただけの安心できる場所です。\n今日、こころにたまっていることを、なんでも話してくださいね。\n\nどんな気持ちも、ちゃんと受け止めます。' }
   ])
   const [input,    setInput]    = useState('')
-  const [nameInput,setNameInput]= useState('')  // ★ 名前入力
+  const [nameInput,setNameInput]= useState('')
   const [loading,  setLoading]  = useState(false)
-  const [used,     setUsed]     = useState(false)
+  const [used,     setUsed]     = useState(() => checkUsedToday())
   const bottomRef = useRef()
+  const midnightRef = useRef()
 
+  // プロフィール名を初期値に
   useEffect(() => {
-    if (!user) return
-    // プロフィールのひらがな名を初期値に
     if (profile?.hiraganaFirst) setNameInput(`${profile.hiraganaFirst}先生`)
-    getDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
-      .then(snap => { if (snap.exists()) setUsed(true) })
-      .catch(() => {})
-  }, [user, profile, today])
+  }, [profile])
+
+  // 0:00 になったら自動リセット
+  useEffect(() => {
+    const scheduleReset = () => {
+      const now  = new Date()
+      const next = new Date()
+      next.setHours(24, 0, 0, 0)  // 翌0:00
+      const ms = next - now
+      midnightRef.current = setTimeout(() => {
+        setUsed(false)
+        scheduleReset()
+      }, ms)
+    }
+    scheduleReset()
+    return () => clearTimeout(midnightRef.current)
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -74,18 +108,19 @@ export default function Hidamari() {
       const reply = await callClaude({ system: SYSTEM_PROMPT, messages: history })
       const finalMsgs = [...newMsgs, { role:'ai', text: reply }]
       setMsgs(finalMsgs)
+
+      // ★ localStorageで使用済みをマーク（Firestoreに依存しない）
+      markUsedToday()
       setUsed(true)
 
-      // 利用記録（失敗しても止まらない）
+      // Firestore保存（失敗しても止まらない）
       setDoc(
         doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today),
-        { used:true, date:today, uid:user.uid, createdAt:new Date().toISOString() }
+        { used: true, date: today, uid: user.uid, createdAt: new Date().toISOString() }
       ).catch(() => {})
 
       // Slack通知（バックグラウンド）
-      sendToSlack(finalMsgs, nameInput.trim() || profile?.hiraganaFirst
-        ? `${profile.hiraganaFirst}先生` : profile?.name || '（名前未入力）'
-      ).catch(err => console.warn('[Hidamari] Slack:', err.message))
+      sendToSlack(finalMsgs, nameInput.trim() || '（名前未入力）').catch(() => {})
 
     } catch (err) {
       console.error('[Hidamari]', err)
@@ -96,27 +131,25 @@ export default function Hidamari() {
 
   const sendToSlack = async (conversation, displayName) => {
     const convText = conversation.slice(1)
-      .map(m => `${m.role==='user' ? displayName : 'AI'}：${m.text}`)
+      .map(m => `${m.role === 'user' ? displayName : 'AI'}：${m.text}`)
       .join('\n\n')
 
     const summary = await callClaude({
       system: '',
-      messages: [{ role:'user', content:`${SUMMARY_PROMPT}\n\n${convText}` }],
+      messages: [{ role:'user', content: `${SUMMARY_PROMPT}\n\n${convText}` }],
       max_tokens: 600,
     })
 
-    // Firestoreに要約を保存（管理者閲覧用）
     setDoc(
       doc(db, 'facilities', FACILITY_ID, 'hidamari_summaries', `${user.uid}_${today}`),
-      { summary, date:today, uid:user.uid, staffName:displayName, createdAt:new Date().toISOString() }
+      { summary, date: today, uid: user.uid, staffName: displayName, createdAt: new Date().toISOString() }
     ).catch(() => {})
 
-    // Firebase ID トークンを取得してサーバーに渡す
     const { getAuth } = await import('firebase/auth')
     let firebaseToken = ''
     try { firebaseToken = await getAuth().currentUser?.getIdToken() || '' } catch (_) {}
 
-    const res = await fetch('/api/send-hidamari-summary', {
+    await fetch('/api/send-hidamari-summary', {
       method: 'POST',
       headers: {
         'Content-Type':      'application/json',
@@ -125,33 +158,30 @@ export default function Hidamari() {
       },
       body: JSON.stringify({ summary, date: today, staffName: displayName }),
     })
-    const result = await res.json()
-    if (result.success) console.log('[Hidamari] ✅ Slack通知完了')
-    else console.warn('[Hidamari]', result.reason || result.error)
   }
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
 
-      {/* ヘッダー */}
       <div style={{ padding:'14px', background:`linear-gradient(135deg,${C.amberLight},#FFF0D0)`, borderBottom:`1.5px solid ${C.amber}33`, flexShrink:0 }}>
         <div style={{ fontSize:18, fontWeight:800, color:C.text }}>☀️ こころのひだまり</div>
         <div style={{ fontSize:13, color:C.sub, marginTop:3 }}>ここだけの、あなたの安心できる場所</div>
 
-        {/* ★ 名前入力欄 */}
+        {/* ★ 名前入力欄（任意） */}
         {!used && (
           <div style={{ marginTop:10 }}>
+            <div style={{ fontSize:12, color:'#B07800', marginBottom:5, display:'flex', alignItems:'center', gap:6 }}>
+              お名前
+              <span style={{ background:'#FFF3CD', color:'#B07800', borderRadius:99, padding:'1px 8px', fontSize:11, fontWeight:500 }}>任意</span>
+            </div>
             <input
               type="text"
               value={nameInput}
               onChange={e => setNameInput(e.target.value)}
-              placeholder="お名前（任意）"
+              placeholder="例：たろう先生（責任者への通知に使われます）"
               autoComplete="off"
-              style={{ width:'100%', padding:'8px 12px', borderRadius:10, border:`1.5px solid ${C.amber}66`, background:'rgba(255,255,255,0.7)', fontSize:13, fontFamily:FONT, outline:'none', color:C.text }}
+              style={{ width:'100%', padding:'9px 12px', borderRadius:10, border:`1.5px solid ${C.amber}66`, background:'rgba(255,255,255,0.8)', fontSize:13, fontFamily:FONT, outline:'none', color:C.text, boxSizing:'border-box' }}
             />
-            <div style={{ fontSize:11, color:'#B07800', marginTop:3 }}>
-              ※ 入力した名前は責任者への通知に使われます
-            </div>
           </div>
         )}
 
@@ -162,7 +192,6 @@ export default function Hidamari() {
         )}
       </div>
 
-      {/* メッセージ一覧 */}
       <div style={{ flex:1, overflowY:'auto', padding:'14px', display:'flex', flexDirection:'column', gap:12 }}>
         {msgs.map((m, i) => (
           <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:m.role==='user'?'flex-end':'flex-start' }}>
@@ -198,7 +227,6 @@ export default function Hidamari() {
         <div ref={bottomRef} />
       </div>
 
-      {/* 入力欄 */}
       <div style={{ padding:'10px 14px', background:C.card, borderTop:`1.5px solid ${C.border}`, flexShrink:0 }}>
         <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
           <textarea

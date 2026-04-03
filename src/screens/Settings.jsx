@@ -155,19 +155,11 @@ export default function Settings() {
 
   // ─── テスト職員追加 ──────────────────────────────────────
   const [hidamariResetMsg, setHidamariResetMsg] = useState('')
-  const resetHidamari = async () => {
-    if (!user) return
-    const today = new Date().toISOString().slice(0, 10)
-    setHidamariResetMsg('リセット中…')
-    deleteDoc(doc(db, 'facilities', FACILITY_ID, 'hidamari', user.uid, 'logs', today))
-      .then(() => {
-        setHidamariResetMsg('✅ リセットしました')
-        setTimeout(() => setHidamariResetMsg(''), 2500)
-      })
-      .catch(err => {
-        setHidamariResetMsg(`❌ ${err.code}`)
-        setTimeout(() => setHidamariResetMsg(''), 3000)
-      })
+  const resetHidamari = () => {
+    // localStorageのひだまり使用記録を削除（Firestoreに依存しない）
+    try { localStorage.removeItem('hidamari_used_date') } catch (_) {}
+    setHidamariResetMsg('✅ リセットしました')
+    setTimeout(() => setHidamariResetMsg(''), 2500)
   }
 
   const addTestStaff = async () => {
@@ -272,16 +264,12 @@ export default function Settings() {
       <div style={{ display:'flex', gap:7, overflowX:'auto', marginBottom:16, paddingBottom:2 }}>
         {(can.editStaff()||devMode)    && <Tab id="staff"    label="職員管理"/>}
         {(can.editChildren()||devMode) && <Tab id="children" label="児童管理"/>}
-        {(devMode||can.assignAdmin())  && <Tab id="roles"    label="権限設定"/>}
-        {(can.isAdminOrAbove()||devMode) && <Tab id="facility" label="🏢 施設設定"/>}
         <Tab id="records" label="📊 これまでの記録"/>
         <Tab id="dev"     label="🔐 開発者"/>
       </div>
 
       {tab==='staff'    && <StaffTab    staffList={staffList} onSave={saveStaff} onDelete={deleteStaff} onAddTest={addTestStaff}/>}
       {tab==='children' && <ChildrenTab children={children}  onSave={saveChild}/>}
-      {tab==='roles'    && <RolesTab    staffList={staffList} updateRole={updateRole} devMode={devMode} role={role}/>}
-      {tab==='facility' && <FacilityTab />}
       {tab==='records'  && <RecordsTab  spreadsheetId={spreadsheetId}/>}
       {tab==='dev'      && <DevTab      devMode={devMode} pwInput={pwInput} setPwInput={setPwInput} pwError={pwError} verifyDev={verifyDev} clearDevMode={clearDevMode} addTestStaff={addTestStaff} onResetHidamari={resetHidamari} hidamariResetMsg={hidamariResetMsg}/>}
 
