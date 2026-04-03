@@ -14,7 +14,42 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const { summary, date, staffName } = req.body
+  const { summary, date, staffName, shiftText, isShift } = req.body
+  if (!summary && !shiftText) return res.status(400).json({ error: 'summary または shiftText は必須です' })
+
+  // ─── シフト表共有モード ─────────────────────────────────
+  if (isShift && shiftText) {
+    try {
+      const slackRes = await fetch(SLACK_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blocks: [
+            {
+              type: 'header',
+              text: { type: 'plain_text', text: `📅 ${date} シフト表`, emoji: true }
+            },
+            {
+              type: 'section',
+              text: { type: 'mrkdwn', text: shiftText }
+            },
+            {
+              type: 'context',
+              elements: [{ type: 'mrkdwn', text: 'コペルプラス 東久留米教室 勤務管理アプリより自動送信' }]
+            }
+          ]
+        }),
+      })
+      if (!slackRes.ok) {
+        const t = await slackRes.text()
+        return res.status(500).json({ error: 'Slack送信失敗', detail: t })
+      }
+      return res.status(200).json({ success: true })
+    } catch (err) {
+      return res.status(500).json({ error: err.message })
+    }
+  }
+
   if (!summary) return res.status(400).json({ error: 'summary は必須です' })
 
   const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL

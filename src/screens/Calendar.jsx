@@ -53,6 +53,8 @@ export default function Calendar() {
   const [syncState, setSyncState] = useState({ status:'idle', message:'' })
   const [gcalConfirm, setGcalConfirm] = useState(false)
   const [gcalTargetId, setGcalTargetId] = useState('')
+  const [slackConfirm, setSlackConfirm] = useState(false)
+  const [slackState,   setSlackState]   = useState({ status:'idle', message:'' })
   const unsubRef  = useRef(null)
   const pendingRef = useRef({})  // ★ ローカル変更を保護（onSnapshotに上書きさせない）
 
@@ -201,53 +203,52 @@ export default function Calendar() {
     setTimeout(() => setSyncState({ status:'idle', message:'' }), 8000)
   }
 
-  // ─── PDF ダウンロード ───────────────────────────────────
-  const downloadPDF = () => {
-    const shifts = schedule.shifts || {}
-    const events = schedule.events || {}
-
-    // 印刷用HTMLを生成
-    const rows = days.map(d => {
-      const dow    = new Date(year, month-1, d).getDay()
-      const isHol  = isHoliday(year, month, d)
-      const bg     = rowBg(year, month, d)
-      const bgCSS  = bg ? `background-color:${bg};` : ''
-      const dowStr = DOW_JA[dow]
-      const ev     = events[d] || ''
-      const cells  = staffList.map(s => {
-        const type = shifts[s.id]?.[d] || 'off'
-        const cfg  = SHIFT[type]
-        return `<td style="text-align:center;padding:3px 6px;background-color:${cfg.bg};color:${cfg.color};font-weight:600;">${cfg.short}</td>`
+  // ─── シフトHTML生成（PDF・Slack共通） ────────────────────
+  const generateShiftHtml = () => {
+    const sh = schedule.shifts || {}
+    const ev = schedule.events || {}
+    // 横向き: 職員を縦（行）、日付を横（列）
+    const staffRows = staffList.map(s => {
+      const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : (s.name || '').split(' ')[1] || s.name || ''
+      const cells = days.map(d => {
+        const dow   = new Date(year, month-1, d).getDay()
+        const isHol = isHoliday(year, month, d)
+        const type  = sh[s.id]?.[d] || 'off'
+        const cfg   = SHIFT[type]
+        const bg    = rowBg(year, month, d)
+        return `<td style="text-align:center;padding:3px 4px;background-color:${bg||cfg.bg};color:${cfg.color};font-weight:600;font-size:10px;">${cfg.short}</td>`
       }).join('')
-      return `<tr style="${bgCSS}">
-        <td style="text-align:center;padding:3px 6px;font-weight:${d===today.getDate()&&month===today.getMonth()+1&&year===today.getFullYear()?700:400}">${d}</td>
-        <td style="text-align:center;padding:3px 6px;color:${dow===0||isHol?'#CC5040':dow===6?'#1565C0':dow===3?'#7B6000':'#2C2926'}">${dowStr}</td>
-        <td style="padding:3px 6px;font-size:11px;">${ev}</td>
+      return `<tr>
+        <td style="padding:4px 8px;font-weight:600;white-space:nowrap;background:#F5F5F0;border-right:2px solid #52BAA8;">${name}</td>
         ${cells}
       </tr>`
     }).join('')
 
-    const headerCells = staffList.map(s => {
-      const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : (s.name || '').split(' ')[1] || s.name || ''
-      return `<th style="padding:4px 6px;font-size:11px;white-space:nowrap;">${name}</th>`
+    const headerCells = days.map(d => {
+      const dow    = new Date(year, month-1, d).getDay()
+      const isHol  = isHoliday(year, month, d)
+      const isToday = d===today.getDate()&&month===today.getMonth()+1&&year===today.getFullYear()
+      const c = dow===0||isHol ? '#CC5040' : dow===6 ? '#1565C0' : dow===3 ? '#7B6000' : '#fff'
+      const bg = isToday ? '#FFA000' : '#52BAA8'
+      return `<th style="text-align:center;padding:3px 2px;color:${c};background:${bg};font-size:10px;min-width:22px;">${d}<br/><span style="font-size:8px">${DOW_JA[dow]}</span></th>`
     }).join('')
 
-    const html = `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8"/>
 <title>コペルプラス 東久留米 ${year}年${month}月 シフト表</title>
 <style>
-  body { font-family: 'M PLUS Rounded 1c', 'Meiryo', sans-serif; font-size: 12px; margin: 10px; }
-  h2 { font-size: 16px; margin-bottom: 10px; }
+  body { font-family: 'M PLUS Rounded 1c', 'Meiryo', sans-serif; font-size: 11px; margin: 8px; }
+  h2 { font-size: 14px; margin-bottom: 8px; }
   table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #CCC; }
-  thead tr { background: #52BAA8; color: #fff; }
-  .legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 11px; }
-  .legend-item { display: flex; align-items: center; gap: 4px; }
-  .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+  th, td { border: 1px solid #DDD; }
+  .legend { display: flex; gap: 12px; margin-bottom: 8px; font-size: 10px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 3px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
   @media print {
-    body { margin: 5mm; }
+    @page { size: A4 landscape; margin: 8mm; }
+    body { margin: 0; }
     .no-print { display: none; }
   }
 </style>
@@ -255,32 +256,60 @@ export default function Calendar() {
 <body>
 <h2>コペルプラス 東久留米教室　${year}年${month}月　シフト表</h2>
 <div class="legend">
-  <div class="legend-item"><div class="legend-dot" style="background:#52BAA8"></div><span>出勤</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#FFB94A"></div><span>遅番</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#FF8A75"></div><span>外勤</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#C8C0B8"></div><span>お休み</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#FFECEA"></div><span>日曜・祝日</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#E3F2FD"></div><span>土曜</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#FFFDE7"></div><span>水曜</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#52BAA8"></div><span>出勤（○）</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFB94A"></div><span>遅番（遅）</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FF8A75"></div><span>外勤（外）</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#C8C0B8"></div><span>お休み（休）</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFECEA"></div>日祝</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#E3F2FD"></div>土</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFFDE7"></div>水</div>
 </div>
-<button class="no-print" onclick="window.print()" style="margin-bottom:12px;padding:8px 20px;background:#52BAA8;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">🖨 印刷する / PDFで保存</button>
+<button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:6px 16px;background:#52BAA8;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;">🖨 印刷する / PDFで保存</button>
 <table>
 <thead>
 <tr>
-  <th style="padding:4px 6px;">日</th>
-  <th style="padding:4px 6px;">曜</th>
-  <th style="padding:4px 6px;">イベント</th>
+  <th style="padding:4px 8px;background:#52BAA8;color:#fff;white-space:nowrap;">職員名</th>
   ${headerCells}
 </tr>
 </thead>
 <tbody>
-${rows}
+${staffRows}
 </tbody>
 </table>
-<p style="margin-top:12px;font-size:10px;color:#888;">作成日時：${new Date().toLocaleString('ja-JP')}</p>
+<p style="margin-top:10px;font-size:9px;color:#888;">作成日時：${new Date().toLocaleString('ja-JP')}</p>
 </body>
 </html>`
+  }
 
+  // ─── Slack用シフト表テキスト生成 ─────────────────────────
+  const generateSlackBlocks = () => {
+    const sh = schedule.shifts || {}
+    const LABEL = { in:'○', late:'遅', ext:'外', off:'ー' }
+    // ヘッダー行（日付）
+    let header = `*コペルプラス 東久留米教室　${year}年${month}月　シフト表*\n`
+    header += `作成日時：${new Date().toLocaleString('ja-JP')}\n\n`
+    header += '```\n'
+    // 列幅調整
+    const namePad = 10
+    const dayHeader = days.map(d => String(d).padStart(2)).join(' ')
+    header += '職員名'.padEnd(namePad) + ' ' + dayHeader + '\n'
+    header += '─'.repeat(namePad + days.length * 3) + '\n'
+
+    staffList.forEach(s => {
+      const name = (s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name || '').slice(0, namePad).padEnd(namePad)
+      const row = days.map(d => {
+        const type = sh[s.id]?.[d] || 'off'
+        return LABEL[type].padStart(2)
+      }).join(' ')
+      header += name + ' ' + row + '\n'
+    })
+    header += '```'
+    return header
+  }
+
+  // ─── PDF ダウンロード ───────────────────────────────────
+  const downloadPDF = () => {
+    const html = generateShiftHtml()
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
     const url  = URL.createObjectURL(blob)
     const win  = window.open(url, '_blank')
@@ -292,6 +321,33 @@ ${rows}
       a.click()
     }
     setTimeout(() => URL.revokeObjectURL(url), 60000)
+  }
+
+  // ─── Slackにシフト表を共有 ───────────────────────────────
+  const shareToSlack = async () => {
+    setSlackConfirm(false)
+    setSlackState({ status:'loading', message:'Slackに共有中…' })
+    try {
+      const text = generateSlackBlocks()
+      const WEBHOOK = process.env.SLACK_WEBHOOK_URL  // 環境変数から（本番）
+      const res = await fetch('/api/send-hidamari-summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-secret': 'copelplus_internal_2026',
+        },
+        body: JSON.stringify({ shiftText: text, date: `${year}年${month}月`, isShift: true }),
+      })
+      const result = await res.json()
+      if (result.success) {
+        setSlackState({ status:'success', message:`✅ Slackにシフト表を共有しました` })
+      } else {
+        setSlackState({ status:'error', message: result.error || '共有に失敗しました' })
+      }
+    } catch (err) {
+      setSlackState({ status:'error', message: `共有に失敗しました: ${err.message}` })
+    }
+    setTimeout(() => setSlackState({ status:'idle', message:'' }), 6000)
   }
 
   const events = schedule.events || {}
@@ -433,13 +489,53 @@ ${rows}
         {/* PDF ダウンロード */}
         <button onClick={downloadPDF}
           style={{ width:'100%', padding:'12px', borderRadius:13, border:`1.5px solid ${C.primary}44`, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:C.primaryDark, cursor:'pointer', fontFamily:FONT }}>
-          📄 PDFとして保存する（印刷用）
+          📄 PDFとして保存する（A4横・印刷用）
         </button>
 
+        {/* Slack共有 */}
+        {slackState.status === 'idle' ? (
+          <button onClick={() => setSlackConfirm(true)}
+            style={{ width:'100%', padding:'12px', borderRadius:13, border:'1.5px solid #4A154B', background:'#F9F0FA', display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:'#4A154B', cursor:'pointer', fontFamily:FONT }}>
+            💬 Slackにシフト表を共有する
+          </button>
+        ) : slackState.status === 'loading' ? (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'12px', borderRadius:13, background:'#F9F0FA' }}>
+            <div style={{ width:16, height:16, borderRadius:'50%', border:'2px solid #E9D0EA', borderTopColor:'#4A154B', animation:'spin .7s linear infinite' }}/>
+            <span style={{ fontSize:13, fontWeight:600, color:'#4A154B' }}>{slackState.message}</span>
+          </div>
+        ) : (
+          <div style={{ padding:'12px', borderRadius:13, background:slackState.status==='success'?C.primaryLight:C.coralLight, textAlign:'center' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:slackState.status==='success'?C.primaryDark:C.coral }}>{slackState.message}</div>
+          </div>
+        )}
+
         <div style={{ fontSize:10, color:C.muted, textAlign:'center' }}>
-          ※ Googleカレンダー：選択した職員の勤務のみ保存されます　　※ PDF：ブラウザの印刷画面が開きます
+          ※ Googleカレンダー：選択した職員の勤務のみ保存されます　　※ PDF：A4横向き　　※ Slack：テキスト形式で共有
         </div>
       </div>
+
+      {/* ─── Slack共有確認モーダル ─── */}
+      {slackConfirm && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }}>
+          <div style={{ background:C.card, borderRadius:20, padding:24, width:'100%', maxWidth:360 }}>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:8 }}>💬 Slackにシフト表を共有</div>
+            <div style={{ fontSize:13, color:C.sub, lineHeight:1.7, marginBottom:20 }}>
+              <strong>{year}年{month}月のシフト表</strong>をSlackに共有しますか？<br/>
+              テキスト形式でこころのひだまりと同じチャンネルに送信されます。
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={shareToSlack}
+                style={{ flex:2, padding:'12px', borderRadius:12, border:'none', background:'#4A154B', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
+                はい、共有する
+              </button>
+              <button onClick={() => setSlackConfirm(false)}
+                style={{ flex:1, padding:'12px', borderRadius:12, border:`1.5px solid ${C.border}`, background:'transparent', color:C.sub, fontSize:14, cursor:'pointer', fontFamily:FONT }}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Googleカレンダー保存：本人確認モーダル ─── */}
       {gcalConfirm && (
