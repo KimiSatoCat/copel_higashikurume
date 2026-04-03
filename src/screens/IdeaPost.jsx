@@ -29,12 +29,19 @@ export default function IdeaPost() {
     await addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
       text,
       createdAt:    serverTimestamp(),
-      likes:        [],  // uid array
-      funnys:       [],  // uid array
-      comments:     [],  // [{uid, name, text, createdAt}]
+      likes:        [],
+      funnys:       [],
+      comments:     [],
     })
     setInput('')
     setPosting(false)
+
+    // Slackに匿名で共有（失敗しても止まらない）
+    fetch('/api/slack-idea', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'x-internal-secret':'copelplus_internal_2026' },
+      body: JSON.stringify({ text }),
+    }).catch(() => {})
   }
 
   const toggleReaction = async (postId, field) => {
