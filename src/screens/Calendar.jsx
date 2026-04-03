@@ -51,9 +51,10 @@ export default function Calendar() {
   const [eventInput,setEventInput]= useState('')
   const [bdayMap,   setBdayMap]   = useState({})
   const [syncState, setSyncState] = useState({ status:'idle', message:'' })
-  const [gcalConfirm, setGcalConfirm] = useState(false)   // 本人確認ダイアログ
-  const [gcalTargetId, setGcalTargetId] = useState('')    // 選択した職員ID
-  const unsubRef = useRef(null)
+  const [gcalConfirm, setGcalConfirm] = useState(false)
+  const [gcalTargetId, setGcalTargetId] = useState('')
+  const unsubRef  = useRef(null)
+  const pendingRef = useRef({})  // ★ ローカル変更を保護（onSnapshotに上書きさせない）
 
   const ym          = `${year}-${String(month).padStart(2,'0')}`
   const daysInMonth = new Date(year, month, 0).getDate()
@@ -81,9 +82,21 @@ export default function Calendar() {
     })
 
     const ref = doc(db,'facilities',FACILITY_ID,'schedules',ym)
-    unsubRef.current = onSnapshot(ref, snap => {
-      setSchedule(snap.exists() ? snap.data() : { shifts:{}, events:{} })
-    })
+    unsubRef.current = onSnapshot(ref,
+      snap => {
+        const data = snap.exists() ? snap.data() : { shifts:{}, events:{} }
+        // ★ pendingRef の変更を保護してからstateを更新
+        setSchedule(prev => {
+          const merged = { ...data, shifts: { ...(data.shifts || {}) } }
+          // ローカルで変更中のセルは上書きしない
+          Object.entries(pendingRef.current).forEach(([staffId, days]) => {
+            merged.shifts[staffId] = { ...(merged.shifts[staffId] || {}), ...days }
+          })
+          return merged
+        })
+      },
+      err => console.warn('[Calendar] snapshot:', err.code || err.message)
+    )
     return () => { if (unsubRef.current) unsubRef.current() }
   }, [ym, month, year])
 
@@ -92,18 +105,31 @@ export default function Calendar() {
   const goToday   = () => { setYear(today.getFullYear()); setMonth(today.getMonth()+1) }
 
   const updateShift = (staffId, day, val) => {
-    // ★ UIを即時更新（Firestoreの応答を待たない）
+    // ★ pendingRef に登録（onSnapshotによる上書きを防ぐ）
+    if (!pendingRef.current[staffId]) pendingRef.current[staffId] = {}
+    pendingRef.current[staffId][day] = val
+
+    // UIを即時更新
     setSchedule(prev => {
       const shifts = { ...(prev.shifts || {}) }
       shifts[staffId] = { ...(shifts[staffId] || {}), [day]: val }
       return { ...prev, shifts }
     })
-    // バックグラウンドでFirestoreに保存（getDocせず直接merge）
+
+    // Firestoreにバックグラウンド保存
     setDoc(
       doc(db, 'facilities', FACILITY_ID, 'schedules', ym),
       { shifts: { [staffId]: { [day]: val } } },
       { merge: true }
-    ).catch(err => console.warn('[Calendar] shift save:', err.code))
+    ).then(() => {
+      // 保存完了後にpendingから削除
+      if (pendingRef.current[staffId]) {
+        delete pendingRef.current[staffId][day]
+        if (Object.keys(pendingRef.current[staffId]).length === 0) {
+          delete pendingRef.current[staffId]
+        }
+      }
+    }).catch(err => console.warn('[Calendar] shift save:', err.code))
   }
 
   const saveEvent = async () => {
