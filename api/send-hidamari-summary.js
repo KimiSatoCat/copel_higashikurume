@@ -14,6 +14,13 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
+  // ★ 変数宣言を先頭に（使用より前に必ず宣言）
+  const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL  // こころのひだまり用
+  const SHIFT_WEBHOOK_URL = process.env.SHIFT_WEBHOOK_URL  // シフト共有用
+  const RESEND_API_KEY    = process.env.RESEND_API_KEY
+  const PROJECT_ID        = process.env.VITE_FIREBASE_PROJECT_ID || 'copelplus-higashikurume'
+  const FACILITY_ID_ENV   = 'higashikurume'
+
   const { summary, date, staffName, shiftText, isShift } = req.body
   if (!summary && !shiftText) return res.status(400).json({ error: 'summary または shiftText は必須です' })
 
@@ -57,8 +64,6 @@ export default async function handler(req, res) {
 
   if (!summary) return res.status(400).json({ error: 'summary は必須です' })
 
-  const SLACK_WEBHOOK_URL  = process.env.SLACK_WEBHOOK_URL   // こころのひだまり用
-  const SHIFT_WEBHOOK_URL  = process.env.SHIFT_WEBHOOK_URL   // シフト共有用
   if (!SLACK_WEBHOOK_URL) {
     console.warn('[hidamari] SLACK_WEBHOOK_URL が未設定です')
     return res.status(200).json({ success: false, reason: 'SLACK_WEBHOOK_URL not configured' })
