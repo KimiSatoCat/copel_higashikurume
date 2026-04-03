@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from './firebase'
 import { useAuth } from './contexts/AuthContext'
+import { DataProvider } from './contexts/DataContext'
 import { useSync } from './hooks/useSync'
 import { FONT, C } from './theme'
 import { scheduleDailyReport } from './utils/sheets'
 
-// ★ 静的インポート（動的インポートによる状態リセット問題を解消）
 import Login    from './screens/Login'
 import Home     from './screens/Home'
 import Calendar from './screens/Calendar'
@@ -135,6 +135,7 @@ export default function App() {
 
   if (isDesktop) {
     return (
+      <DataProvider user={user}>
       <div style={{ display:'flex', height:'100vh', background:C.bg, fontFamily:FONT, overflow:'hidden' }}>
         <SideNav active={tab} setActive={setTab} />
         <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
@@ -151,10 +152,12 @@ export default function App() {
           </div>
         </main>
       </div>
+      </DataProvider>
     )
   }
 
   return (
+    <DataProvider user={user}>
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:C.bg, fontFamily:FONT, maxWidth:480, margin:'0 auto', overflow:'hidden' }}>
       <SyncBar />
       <div style={{ flex:1, overflow:'hidden', position:'relative' }}>
@@ -162,5 +165,6 @@ export default function App() {
       </div>
       <BottomNav active={tab} setActive={setTab} />
     </div>
+    </DataProvider>
   )
 }

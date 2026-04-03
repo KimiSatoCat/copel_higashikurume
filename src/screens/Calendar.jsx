@@ -377,32 +377,29 @@ ${staffRows}
   // ─── Slackにシフト表を共有 ───────────────────────────────
   const shareToSlack = async () => {
     setSlackConfirm(false)
-    setSlackState({ status:'loading', message:'Slackに共有中…' })
+    setSlackState({ status:'loading', message:'シフト表を生成中…' })
     try {
-      const text = generateSlackBlocks()
-      const WEBHOOK = process.env.SLACK_WEBHOOK_URL  // 環境変数から（本番）
-      const res = await fetch('/api/send-hidamari-summary', {
+      // PDFとして保存するのと同じHTMLを生成してSlackにアップロード
+      const html = generateShiftHtml()
+      setSlackState({ status:'loading', message:'Slackにアップロード中…' })
+      const res = await fetch('/api/slack-upload-shift', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type':      'application/json',
           'x-internal-secret': 'copelplus_internal_2026',
         },
-        body: JSON.stringify({
-        shiftBlocks: generateSlackBlocks(),
-        date: `${year}年${month}月`,
-        isShift: true,
-      }),
+        body: JSON.stringify({ html, year, month }),
       })
       const result = await res.json()
       if (result.success) {
-        setSlackState({ status:'success', message:`✅ Slackにシフト表を共有しました` })
+        setSlackState({ status:'success', message:`✅ ${year}年${month}月のシフト表をSlackに共有しました` })
       } else {
         setSlackState({ status:'error', message: result.error || '共有に失敗しました' })
       }
     } catch (err) {
       setSlackState({ status:'error', message: `共有に失敗しました: ${err.message}` })
     }
-    setTimeout(() => setSlackState({ status:'idle', message:'' }), 6000)
+    setTimeout(() => setSlackState({ status:'idle', message:'' }), 8000)
   }
 
   const events = schedule.events || {}
