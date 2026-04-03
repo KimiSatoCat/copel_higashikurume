@@ -8,17 +8,21 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        // ★ JS/CSS/フォントをService Workerでキャッシュ → 2回目以降は瞬時にロード
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // ★ /api/* はService Workerを通さずネットワーク直通
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            // Google Fonts をキャッシュ
+            // /api/* は必ずネットワークから取得（キャッシュしない）
+            urlPattern: /\/api\//,
+            handler: 'NetworkOnly',
+          },
+          {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\//,
             handler: 'CacheFirst',
             options: { cacheName: 'google-fonts', expiration: { maxAgeSeconds: 60 * 60 * 24 * 365 } }
           },
           {
-            // Firebase API をネットワーク優先、オフライン時はキャッシュ
             urlPattern: /^https:\/\/.*\.googleapis\.com\//,
             handler: 'NetworkFirst',
             options: { cacheName: 'firebase-api', networkTimeoutSeconds: 3 }
