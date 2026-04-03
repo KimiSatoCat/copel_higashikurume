@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import {
-  collection, doc, addDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, serverTimestamp, query, orderBy
+  collection, doc, addDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, serverTimestamp, query, orderBy, deleteDoc
 } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { C, FONT } from '../theme'
 
 export default function IdeaPost() {
-  const { user, profile } = useAuth()
+  const { user, profile, can, role } = useAuth()
   const [posts,    setPosts]    = useState([])
   const [input,    setInput]    = useState('')
   const [posting,  setPosting]  = useState(false)
@@ -70,6 +70,10 @@ export default function IdeaPost() {
 
   const toggleComments = (postId) => {
     setOpenComments(p => ({...p, [postId]: !p[postId]}))
+  }
+
+  const deletePost = async (postId) => {
+    await deleteDoc(doc(db,'facilities',FACILITY_ID,'ideas',postId))
   }
 
   return (
@@ -138,6 +142,14 @@ export default function IdeaPost() {
                   <span style={{ fontSize:14 }}>💬</span>
                   <span style={{ fontSize:13, fontWeight:700, color:isOpen?C.primaryDark:C.sub }}>{comments.length}</span>
                 </button>
+
+                {/* 削除ボタン（開発者・責任者のみ） */}
+                {['developer','admin','sub_admin'].includes(role) && (
+                  <button onClick={() => deletePost(post.id)}
+                    style={{ width:30, height:30, borderRadius:'50%', border:`1.5px solid ${C.coral}44`, background:C.coralLight, color:C.coral, fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                    🗑
+                  </button>
+                )}
               </div>
 
               {/* コメントセクション */}
