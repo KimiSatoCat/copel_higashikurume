@@ -51,6 +51,8 @@ export default function Calendar() {
   const [eventInput,setEventInput]= useState('')
   const [bdayMap,   setBdayMap]   = useState({})
   const [syncState, setSyncState] = useState({ status:'idle', message:'' })
+  const [gcalConfirm, setGcalConfirm] = useState(false)   // 本人確認ダイアログ
+  const [gcalTargetId, setGcalTargetId] = useState('')    // 選択した職員ID
   const unsubRef = useRef(null)
 
   const ym          = `${year}-${String(month).padStart(2,'0')}`
@@ -90,7 +92,6 @@ export default function Calendar() {
   const goToday   = () => { setYear(today.getFullYear()); setMonth(today.getMonth()+1) }
 
   const updateShift = async (staffId, day, val) => {
-    if (!can.editSchedule()) return
     const ref  = doc(db,'facilities',FACILITY_ID,'schedules',ym)
     const snap = await getDoc(ref)
     const data = snap.exists() ? snap.data() : { shifts:{}, events:{} }
@@ -111,13 +112,14 @@ export default function Calendar() {
     setEventInput('')
   }
 
-  // ─── Google カレンダー連携 ───────────────────────────────
-  const syncToGoogleCalendar = async () => {
-    setSyncState({ status:'loading', message:'Googleカレンダーに連携中…' })
+  // ─── Google カレンダー保存 ───────────────────────────────
+  const syncToGoogleCalendar = async (targetUid) => {
+    setGcalConfirm(false)
+    setSyncState({ status:'loading', message:'Googleカレンダーに保存中…' })
     try {
       const accessToken = await getGoogleToken()
-      const myUid       = user?.uid
-      const myShifts    = (schedule.shifts || {})[myUid] || {}
+      const uid         = targetUid || user?.uid
+      const myShifts    = (schedule.shifts || {})[uid] || {}
       const entries     = Object.entries(myShifts).filter(([, t]) => t !== 'off')
 
       if (entries.length === 0) {
@@ -160,7 +162,7 @@ export default function Calendar() {
       setSyncState({ status: failed===0 ? 'success' : 'error', message: msg })
     } catch (err) {
       console.error('[GCal]', err)
-      setSyncState({ status:'error', message: `連携に失敗しました: ${err.message}` })
+      setSyncState({ status:'error', message: `保存に失敗しました: ${err.message}` })
     }
     setTimeout(() => setSyncState({ status:'idle', message:'' }), 5000)
   }
@@ -271,12 +273,12 @@ ${rows}
           <div style={{ flex:1, textAlign:'center', fontSize:17, fontWeight:800, color:C.text }}>{year}年{month}月</div>
           <button onClick={nextMonth} style={{ border:`1.5px solid ${C.border}`, background:'transparent', borderRadius:8, padding:'5px 10px', fontSize:14, cursor:'pointer', fontFamily:FONT }}>▶</button>
           <button onClick={goToday}   style={{ border:`1.5px solid ${C.primary}`, background:C.primaryLight, borderRadius:8, padding:'5px 10px', fontSize:11, cursor:'pointer', fontFamily:FONT, color:C.primaryDark, fontWeight:700 }}>今月</button>
-          {can.editSchedule() && (
+          {
             <button onClick={() => setEditMode(m=>!m)}
               style={{ border:`1.5px solid ${editMode?C.primary:C.border}`, background:editMode?C.primaryLight:'transparent', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:editMode?700:400, color:editMode?C.primaryDark:C.sub, cursor:'pointer', fontFamily:FONT }}>
               {editMode ? '✏️ 編集中' : '編集'}
             </button>
-          )}
+          }
         </div>
         {/* 凡例 */}
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
@@ -377,11 +379,11 @@ ${rows}
       {/* ─── 下部ボタン（カレンダー連携 ＋ PDF保存） ─── */}
       <div style={{ padding:'10px 12px', background:C.card, borderTop:`1px solid ${C.divider}`, flexShrink:0, display:'flex', flexDirection:'column', gap:8 }}>
 
-        {/* Google カレンダー連携 */}
+        {/* Google カレンダー保存 */}
         {syncState.status === 'idle' ? (
-          <button onClick={syncToGoogleCalendar}
+          <button onClick={() => setGcalConfirm(true)}
             style={{ width:'100%', padding:'12px', borderRadius:13, border:`1.5px solid ${C.border}`, background:C.card, display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:C.text, cursor:'pointer', fontFamily:FONT }}>
-            <GoogleIcon size={16}/> 自分の勤務を Googleカレンダーに連携する
+            <GoogleIcon size={16}/> 自分の勤務をGoogleカレンダーに保存する
           </button>
         ) : syncState.status === 'loading' ? (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'12px', borderRadius:13, background:C.amberLight }}>
@@ -401,11 +403,64 @@ ${rows}
         </button>
 
         <div style={{ fontSize:10, color:C.muted, textAlign:'center' }}>
-          ※ カレンダー連携：自分の勤務のみ追加されます　　※ PDF：ブラウザの印刷画面が開きます
+          ※ Googleカレンダー：選択した職員の勤務のみ保存されます　　※ PDF：ブラウザの印刷画面が開きます
         </div>
       </div>
 
-      {/* ─── イベント追加モーダル ─── */}
+      {/* ─── Googleカレンダー保存：本人確認モーダル ─── */}
+      {gcalConfirm && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }}>
+          <div style={{ background:C.card, borderRadius:20, padding:24, width:'100%', maxWidth:380 }}>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:6 }}>
+              📅 どなたのシフトを保存しますか？
+            </div>
+            <div style={{ fontSize:13, color:C.sub, marginBottom:16, lineHeight:1.6 }}>
+              職員を選択すると「○○先生はあなたで間違いないですか？」と確認します。
+            </div>
+
+            <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:300, overflowY:'auto', marginBottom:16 }}>
+              {staffList.map(s => {
+                const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name
+                const isMe = gcalTargetId === s.id
+                return (
+                  <button key={s.id} onClick={() => setGcalTargetId(s.id)}
+                    style={{ padding:'11px 14px', borderRadius:12, border:`2px solid ${isMe ? C.primary : C.border}`, background:isMe ? C.primaryLight : 'transparent', fontSize:14, fontWeight:isMe ? 700 : 400, color:isMe ? C.primaryDark : C.text, cursor:'pointer', fontFamily:FONT, textAlign:'left' }}>
+                    {isMe ? '✓ ' : ''}{name}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* 選択後の本人確認 */}
+            {gcalTargetId && (() => {
+              const s = staffList.find(x => x.id === gcalTargetId)
+              const name = s?.hiraganaFirst ? `${s.hiraganaFirst}先生` : s?.name || '職員'
+              return (
+                <div style={{ background:C.amberLight, borderRadius:12, padding:'12px 14px', marginBottom:14 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#7A5000', marginBottom:10 }}>
+                    「{name}」はあなたで間違いないですか？
+                  </div>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button onClick={() => syncToGoogleCalendar(gcalTargetId)}
+                      style={{ flex:1, padding:'10px', borderRadius:10, border:'none', background:C.primary, color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
+                      はい、保存する
+                    </button>
+                    <button onClick={() => setGcalTargetId('')}
+                      style={{ flex:1, padding:'10px', borderRadius:10, border:`1.5px solid ${C.border}`, background:'transparent', color:C.sub, fontSize:14, cursor:'pointer', fontFamily:FONT }}>
+                      いいえ
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
+
+            <button onClick={() => { setGcalConfirm(false); setGcalTargetId('') }}
+              style={{ width:'100%', padding:'10px', borderRadius:10, border:`1.5px solid ${C.border}`, background:'transparent', fontSize:13, color:C.sub, cursor:'pointer', fontFamily:FONT }}>
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )}
       {modalDay && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end', zIndex:200 }} onClick={() => setModalDay(null)}>
           <div style={{ background:C.card, borderRadius:'22px 22px 0 0', padding:'22px 18px 30px', width:'100%' }} onClick={e => e.stopPropagation()}>
