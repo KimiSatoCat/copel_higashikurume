@@ -27,6 +27,8 @@ export default async function handler(req, res) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          username: 'シフト管理',
+          icon_emoji: ':calendar:',
           blocks: [
             {
               type: 'header',
@@ -64,6 +66,8 @@ export default async function handler(req, res) {
 
   // Slack Block Kit でリッチなメッセージを送信
   const payload = {
+    username: 'こころのひだまり',
+    icon_emoji: ':sunny:',
     blocks: [
       {
         type: 'header',
