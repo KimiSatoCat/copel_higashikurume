@@ -256,7 +256,7 @@ export default function Calendar() {
 <h2>コペルプラス 東久留米教室　${year}年${month}月　シフト表</h2>
 <div class="legend">
   <div class="legend-item"><div class="legend-dot" style="background:#52BAA8"></div><span>出勤</span></div>
-  <div class="legend-item"><div class="legend-dot" style="background:#FFB94A"></div><span>遅刻</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFB94A"></div><span>遅番</span></div>
   <div class="legend-item"><div class="legend-dot" style="background:#FF8A75"></div><span>外勤</span></div>
   <div class="legend-item"><div class="legend-dot" style="background:#C8C0B8"></div><span>お休み</span></div>
   <div class="legend-item"><div class="legend-dot" style="background:#FFECEA"></div><span>日曜・祝日</span></div>

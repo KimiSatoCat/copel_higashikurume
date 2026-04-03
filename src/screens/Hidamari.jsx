@@ -185,7 +185,7 @@ export default function Hidamari() {
               type="text"
               value={nameInput}
               onChange={e => setNameInput(e.target.value)}
-              placeholder="例：たろう先生（責任者への通知に使われます）"
+              placeholder="例：たろう先生"
               autoComplete="off"
               style={{ width:'100%', padding:'9px 12px', borderRadius:10, border:`1.5px solid ${C.amber}66`, background:'rgba(255,255,255,0.8)', fontSize:13, fontFamily:FONT, outline:'none', color:C.text, boxSizing:'border-box' }}
             />
