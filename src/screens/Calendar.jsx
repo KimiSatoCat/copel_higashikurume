@@ -3,6 +3,7 @@ import { doc, onSnapshot, setDoc, getDoc, collection, getDocs } from 'firebase/f
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth'
 import { db, FACILITY_ID, auth, googleProvider } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
+import { useData } from '../contexts/DataContext'
 import { C, FONT, SHIFT, DOW_JA } from '../theme'
 import { cacheGet, cacheSet } from '../utils/cache'
 
@@ -41,11 +42,12 @@ const GCAL_COLOR = { in:'2', late:'5', ext:'6' }
 
 export default function Calendar() {
   const { can, getGoogleToken, user } = useAuth()
+  const { staffList: cachedStaff } = useData()   // ★ App起動時にキャッシュ済み
   const today = new Date()
 
   const [year,      setYear]      = useState(today.getFullYear())
   const [month,     setMonth]     = useState(today.getMonth() + 1)
-  const [staffList, setStaffList] = useState(() => cacheGet('staffList') || [])
+  const [staffList, setStaffList] = useState(() => cachedStaff.length ? cachedStaff : (cacheGet('staffList') || []))
   const [schedule,  setSchedule]  = useState(() => cacheGet(`schedule_${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || { shifts:{}, events:{} })
   const [loading,   setLoading]   = useState(true)
   const [editMode,  setEditMode]  = useState(false)
@@ -66,29 +68,39 @@ export default function Calendar() {
 
   useEffect(() => {
     if (unsubRef.current) unsubRef.current()
-    // 月切り替え時：キャッシュがあれば即時表示、なければローディング
     const cached = cacheGet(`schedule_${ym}`)
     if (!cached) setLoading(true)
-    else setSchedule(cached)
+    else { setSchedule(cached); setLoading(false) }
 
-    getDocs(collection(db,'facilities',FACILITY_ID,'staff')).then(snap => {
-      const list = snap.docs.filter(d => d.data().active).map(d => ({ id:d.id, ...d.data() }))
-      setStaffList(list)
-      cacheSet('staffList', list)  // ★ キャッシュ保存
-
+    // DataContextにキャッシュがあればFirestoreアクセスしない
+    if (cachedStaff.length) {
+      setStaffList(cachedStaff)
       const map = {}
-      list.forEach(s => {
+      cachedStaff.forEach(s => {
         if (!s.birthday) return
-        const parts  = s.birthday.split('-')
-        const bMonth = parseInt(parts[1])
-        const bDay   = parseInt(parts[2])
-        if (bMonth === month) {
-          const name = s.hiraganaFirst || s.hiraganaName?.split(' ')[0] || s.name?.split(' ')[0] || ''
-          ;(map[bDay] = map[bDay] || []).push({ name, type:'staff' })
+        const parts = s.birthday.split('-')
+        if (parseInt(parts[1]) === month) {
+          const name = s.hiraganaFirst || s.name?.split(' ')[0] || ''
+          ;(map[parseInt(parts[2])] = map[parseInt(parts[2])] || []).push({ name, type:'staff' })
         }
       })
       setBdayMap(map)
-    }).catch(() => {})
+    } else {
+      getDocs(collection(db,'facilities',FACILITY_ID,'staff')).then(snap => {
+        const list = snap.docs.filter(d => d.data().active).map(d => ({ id:d.id, ...d.data() }))
+        setStaffList(list); cacheSet('staffList', list)
+        const map = {}
+        list.forEach(s => {
+          if (!s.birthday) return
+          const parts = s.birthday.split('-')
+          if (parseInt(parts[1]) === month) {
+            const name = s.hiraganaFirst || s.name?.split(' ')[0] || ''
+            ;(map[parseInt(parts[2])] = map[parseInt(parts[2])] || []).push({ name, type:'staff' })
+          }
+        })
+        setBdayMap(map)
+      }).catch(() => {})
+    }
 
     const ref = doc(db,'facilities',FACILITY_ID,'schedules',ym)
     unsubRef.current = onSnapshot(ref,
@@ -108,7 +120,7 @@ export default function Calendar() {
       err => console.warn('[Calendar] snapshot:', err.code || err.message)
     )
     return () => { if (unsubRef.current) unsubRef.current() }
-  }, [ym, month, year])
+  }, [ym, month, year, cachedStaff])
 
   const prevMonth = () => { if(month===1){setYear(y=>y-1);setMonth(12)}else setMonth(m=>m-1) }
   const nextMonth = () => { if(month===12){setYear(y=>y+1);setMonth(1)}else setMonth(m=>m+1) }
