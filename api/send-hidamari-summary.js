@@ -19,8 +19,11 @@ export default async function handler(req, res) {
 
   // ─── シフト表共有モード ─────────────────────────────────
   if (isShift && shiftText) {
+    if (!SHIFT_WEBHOOK_URL) {
+      return res.status(500).json({ error: 'SHIFT_WEBHOOK_URL が未設定です' })
+    }
     try {
-      const slackRes = await fetch(SLACK_WEBHOOK_URL, {
+      const slackRes = await fetch(SHIFT_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -52,7 +55,8 @@ export default async function handler(req, res) {
 
   if (!summary) return res.status(400).json({ error: 'summary は必須です' })
 
-  const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL
+  const SLACK_WEBHOOK_URL  = process.env.SLACK_WEBHOOK_URL   // こころのひだまり用
+  const SHIFT_WEBHOOK_URL  = process.env.SHIFT_WEBHOOK_URL   // シフト共有用
   if (!SLACK_WEBHOOK_URL) {
     console.warn('[hidamari] SLACK_WEBHOOK_URL が未設定です')
     return res.status(200).json({ success: false, reason: 'SLACK_WEBHOOK_URL not configured' })
