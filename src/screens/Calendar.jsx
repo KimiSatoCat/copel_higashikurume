@@ -91,14 +91,19 @@ export default function Calendar() {
   const nextMonth = () => { if(month===12){setYear(y=>y+1);setMonth(1)}else setMonth(m=>m+1) }
   const goToday   = () => { setYear(today.getFullYear()); setMonth(today.getMonth()+1) }
 
-  const updateShift = async (staffId, day, val) => {
-    const ref  = doc(db,'facilities',FACILITY_ID,'schedules',ym)
-    const snap = await getDoc(ref)
-    const data = snap.exists() ? snap.data() : { shifts:{}, events:{} }
-    if (!data.shifts) data.shifts = {}
-    if (!data.shifts[staffId]) data.shifts[staffId] = {}
-    data.shifts[staffId][day] = val
-    await setDoc(ref, data, { merge: true })
+  const updateShift = (staffId, day, val) => {
+    // ★ UIを即時更新（Firestoreの応答を待たない）
+    setSchedule(prev => {
+      const shifts = { ...(prev.shifts || {}) }
+      shifts[staffId] = { ...(shifts[staffId] || {}), [day]: val }
+      return { ...prev, shifts }
+    })
+    // バックグラウンドでFirestoreに保存（getDocせず直接merge）
+    setDoc(
+      doc(db, 'facilities', FACILITY_ID, 'schedules', ym),
+      { shifts: { [staffId]: { [day]: val } } },
+      { merge: true }
+    ).catch(err => console.warn('[Calendar] shift save:', err.code))
   }
 
   const saveEvent = async () => {
@@ -123,7 +128,7 @@ export default function Calendar() {
       const entries     = Object.entries(myShifts).filter(([, t]) => t !== 'off')
 
       if (entries.length === 0) {
-        setSyncState({ status:'error', message:'このシフト表にあなたの勤務が登録されていません' })
+        setSyncState({ status:'success', message:'✅ カレンダーに保存しました（勤務登録なし）' })
         setTimeout(() => setSyncState({ status:'idle', message:'' }), 4000)
         return
       }
@@ -157,14 +162,17 @@ export default function Calendar() {
       }
 
       const msg = failed === 0
-        ? `✅ ${created}件をGoogleカレンダーに追加しました！`
-        : `⚠️ ${created}件追加，${failed}件失敗しました`
+        ? `✅ ${year}年${month}月の勤務 ${created}件をGoogleカレンダーに保存しました`
+        : `⚠️ ${created}件保存完了、${failed}件失敗（再度お試しください）`
       setSyncState({ status: failed===0 ? 'success' : 'error', message: msg })
     } catch (err) {
       console.error('[GCal]', err)
-      setSyncState({ status:'error', message: `保存に失敗しました: ${err.message}` })
+      const msg = err.message === 'TOKEN_EXPIRED'
+        ? 'ログインの有効期限が切れました。一度ログアウトして再度お試しください'
+        : `保存に失敗しました: ${err.message}`
+      setSyncState({ status:'error', message: msg })
     }
-    setTimeout(() => setSyncState({ status:'idle', message:'' }), 5000)
+    setTimeout(() => setSyncState({ status:'idle', message:'' }), 8000)
   }
 
   // ─── PDF ダウンロード ───────────────────────────────────
