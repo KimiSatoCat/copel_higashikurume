@@ -74,8 +74,10 @@ export default async function handler(req, res) {
   }
 
   if (!adminEmails.length) {
-    console.warn('[hidamari] 送信先メールアドレスが見つかりません')
-    return res.status(200).json({ success:false, reason:'no admin emails found' })
+    // ADMIN_EMAILS 未設定・Firestore取得失敗の場合は Resend アカウントのメールに送信
+    // （Resendの無料プランはドメイン認証なしでは自アカウントのみ送信可能）
+    console.warn('[hidamari] 送信先が見つからないため boc.merks3@gmail.com に送信')
+    adminEmails = ['boc.merks3@gmail.com']
   }
 
   console.log('[hidamari] 送信先:', adminEmails)
@@ -122,7 +124,7 @@ export default async function handler(req, res) {
       headers:{ 'Authorization':`Bearer ${RESEND_API_KEY}`, 'Content-Type':'application/json' },
       body: JSON.stringify({
         from:    'onboarding@resend.dev',
-        to:      adminEmails,
+        to:      ['boc.merks3@gmail.com'],  // ドメイン認証前は自アカウントのみ送信可能
         subject: `【こころのひだまり】${date} 利用通知（コペルプラス 東久留米）`,
         html,
       }),
