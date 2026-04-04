@@ -26,31 +26,35 @@ export default function IdeaPost() {
     const text = input.trim()
     if (!text || posting) return
     setPosting(true)
-    await addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
-      text,
-      createdAt:    serverTimestamp(),
-      likes:        [],
-      funnys:       [],
-      comments:     [],
-    })
-    setInput('')
+    try {
+      await addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
+        text,
+        createdAt:    serverTimestamp(),
+        likes:        [],
+        funnys:       [],
+        comments:     [],
+      })
+      setInput('')
+    } catch (e) {
+      console.error('[IdeaPost] 投稿エラー:', e.message)
+      setPosting(false)
+      return
+    }
     setPosting(false)
 
-    // Slackに匿名で共有（絶対URLでService Worker完全バイパス）
+    // Slackに匿名で共有
     try {
-      const origin = 'https://copel-higashikurume.vercel.app'
-      const r = await fetch(`${origin}/api/slack-idea`, {
+      const r = await fetch('/api/slack-idea', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-internal-secret': 'copelplus_internal_2026',
-          'Cache-Control': 'no-store',
         },
         body: JSON.stringify({ text }),
         cache: 'no-store',
       })
       const result = await r.json()
-      if (!result.success) console.warn('[IdeaPost] Slack通知失敗:', result)
+      console.log('[IdeaPost] Slack通知:', result)
     } catch (e) {
       console.warn('[IdeaPost] Slack通知エラー:', e.message)
     }
