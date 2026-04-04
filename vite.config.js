@@ -9,12 +9,11 @@ export default defineConfig({
       registerType: 'autoUpdate',
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // ★ /api/* はService Workerを通さずネットワーク直通
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            // /api/* は必ずネットワークから取得（キャッシュしない）
-            urlPattern: /\/api\//,
+            // /api/* はService Workerを一切経由させない
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
             handler: 'NetworkOnly',
           },
           {
