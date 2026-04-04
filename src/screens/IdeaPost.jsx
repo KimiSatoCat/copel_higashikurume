@@ -27,35 +27,25 @@ export default function IdeaPost() {
     const text = input.trim()
     if (!text || posting) return
     setPosting(true)
-    setInput('')  // 先にクリアして連続投稿を防ぐ
+    setInput('')
 
-    // Firestoreに保存
-    try {
-      await addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
-        text,
-        createdAt:    serverTimestamp(),
-        likes:        [],
-        funnys:       [],
-        comments:     [],
-      })
-    } catch (e) {
-      console.error('[IdeaPost] 保存エラー:', e.message)
-      setInput(text)  // 失敗したら元に戻す
-      setPosting(false)
-      return
-    }
-    setPosting(false)  // 保存完了後すぐ解除（Slackを待たない）
-
-    // Slackに匿名で共有（バックグラウンドで実行）
-    fetch('/api/slack-idea', {
+    // Slackへの通知とFirestore保存を並行実行（互いに依存しない）
+    const slackPromise = fetch('/api/slack-idea', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-internal-secret': 'copelplus_internal_2026' },
       body: JSON.stringify({ text }),
-    }).then(r => r.json()).then(result => {
-      console.log('[IdeaPost] Slack通知:', result)
-    }).catch(e => {
-      console.warn('[IdeaPost] Slack通知エラー:', e.message)
-    })
+    }).then(r => r.json()).then(d => console.log('[IdeaPost] Slack:', d)).catch(e => console.warn('[IdeaPost] Slack error:', e.message))
+
+    const firestorePromise = addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
+      text,
+      createdAt:    serverTimestamp(),
+      likes:        [],
+      funnys:       [],
+      comments:     [],
+    }).catch(e => console.error('[IdeaPost] Firestore error:', e.message))
+
+    await Promise.allSettled([slackPromise, firestorePromise])
+    setPosting(false)
   }
 
   const toggleReaction = async (postId, field) => {
