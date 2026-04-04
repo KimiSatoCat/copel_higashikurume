@@ -1,3 +1,9 @@
+// api/slack-upload-shift.js
+// シフト表HTMLをVercel KVに保存し、URLをSlackに共有する
+// → URLを踏むと画像1の画面が開き、各自がPDFで保存できる
+
+import { put } from '@vercel/blob'
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -6,83 +12,62 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
   if (req.headers['x-internal-secret'] !== 'copelplus_internal_2026') return res.status(401).json({ error: 'Unauthorized' })
 
-  const BOT_TOKEN  = process.env.SLACK_BOT_TOKEN
-  const CHANNEL_ID = process.env.SHIFT_CHANNEL_ID
-  const WEBHOOK    = process.env.SHIFT_WEBHOOK_URL  // フォールバック
-
+  const WEBHOOK = process.env.SHIFT_WEBHOOK_URL
   const { html, year, month } = req.body
-  if (!html) return res.status(400).json({ error: 'html is required' })
+  if (!html || !WEBHOOK) return res.status(400).json({ error: 'html と SHIFT_WEBHOOK_URL が必要です' })
 
-  // Bot Tokenがある場合はファイルアップロード
-  if (BOT_TOKEN && CHANNEL_ID) {
-    try {
-      const content = html
-      const bytes   = Buffer.byteLength(content, 'utf8')
-      const filename = `シフト表_${year}年${month}月.html`
-
-      const urlRes = await fetch('https://slack.com/api/files.getUploadURLExternal', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ filename, length: String(bytes) })
-      })
-      const urlData = await urlRes.json()
-
-      if (!urlData.ok) {
-        console.error('[shift] getUploadURL error:', urlData.error)
-        // Bot Tokenが使えない場合はWebhookにフォールバック
-        if (WEBHOOK) { return await sendViaWebhook(WEBHOOK, year, month, res) }
-        return res.status(500).json({ error: urlData.error })
-      }
-
-      await fetch(urlData.upload_url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        body: Buffer.from(content, 'utf8')
-      })
-
-      const completeRes = await fetch('https://slack.com/api/files.completeUploadExternal', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          files: [{ id: urlData.file_id, title: `${year}年${month}月 シフト表（コペルプラス 東久留米教室）` }],
-          channel_id: CHANNEL_ID,
-          initial_comment: `📅 *${year}年${month}月 シフト表* を共有しました。ブラウザで開いて印刷するとA4横向きPDFに保存できます。`
-        })
-      })
-      const completeData = await completeRes.json()
-      if (!completeData.ok) {
-        if (WEBHOOK) { return await sendViaWebhook(WEBHOOK, year, month, res) }
-        return res.status(500).json({ error: completeData.error })
-      }
-
-      console.log('[shift] ✅ ファイルアップロード完了')
-      return res.status(200).json({ success: true })
-
-    } catch (e) {
-      if (WEBHOOK) { return await sendViaWebhook(WEBHOOK, year, month, res) }
-      return res.status(500).json({ error: e.message })
-    }
-  }
-
-  // Bot Tokenなし → Webhookのみ
-  if (WEBHOOK) { return await sendViaWebhook(WEBHOOK, year, month, res) }
-  return res.status(500).json({ error: 'SLACK_BOT_TOKEN または SHIFT_WEBHOOK_URL が必要です' })
-}
-
-async function sendViaWebhook(webhook, year, month, res) {
   try {
-    const r = await fetch(webhook, {
+    // 1. HTMLをVercel Blobに保存して固定URLを取得
+    const filename = `shift-${year}-${String(month).padStart(2,'0')}.html`
+    const blob = await put(filename, html, {
+      access: 'public',
+      contentType: 'text/html; charset=utf-8',
+      addRandomSuffix: false,
+    })
+
+    // 2. そのURLをSlack Webhookで共有
+    const slackRes = await fetch(WEBHOOK, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: 'シフト管理',
         icon_emoji: ':calendar:',
-        text: `📅 *${year}年${month}月 シフト表* をアプリから確認・PDFで保存してください。\n📎 シフト表のPDF保存：アプリ「みんなのスケジュール」→「PDFとして保存する」`
+        blocks: [
+          {
+            type: 'header',
+            text: { type: 'plain_text', text: `📅 ${year}年${month}月 シフト表`, emoji: true }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `シフト表が更新されました。\n下のリンクを開いてブラウザの印刷機能でPDFに保存できます。`
+            },
+            accessory: {
+              type: 'button',
+              text: { type: 'plain_text', text: '📄 シフト表を開く', emoji: true },
+              url: blob.url,
+              action_id: 'open_shift'
+            }
+          },
+          {
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: `コペルプラス 東久留米教室　作成：${new Date().toLocaleString('ja-JP')}` }]
+          }
+        ]
       })
     })
-    if (!r.ok) { const t = await r.text(); return res.status(500).json({ error: t }) }
-    return res.status(200).json({ success: true, method: 'webhook' })
-  } catch (e) {
-    return res.status(500).json({ error: e.message })
+
+    if (!slackRes.ok) {
+      const t = await slackRes.text()
+      return res.status(500).json({ error: `Slack送信失敗: ${t}` })
+    }
+
+    console.log('[shift] ✅ シフト表URL共有完了:', blob.url)
+    return res.status(200).json({ success: true, url: blob.url })
+
+  } catch (err) {
+    console.error('[shift] エラー:', err.message)
+    return res.status(500).json({ error: err.message })
   }
 }
