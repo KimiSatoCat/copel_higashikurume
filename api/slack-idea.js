@@ -19,7 +19,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         username: 'アイデアポスト',
         icon_emoji: ':mailbox:',
-        text: `📬 *新しいアイデア・意見が届きました*\n\n${text}\n\n_投稿者は匿名です_`
+        text: `📬 *新しいアイデア・意見が届きました*\n\n${text}`
       })
     })
     if (!r.ok) { const t = await r.text(); return res.status(500).json({ error: t }) }

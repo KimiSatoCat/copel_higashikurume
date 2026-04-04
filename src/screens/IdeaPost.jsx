@@ -25,21 +25,15 @@ export default function IdeaPost() {
 
   const submit = async () => {
     const text = input.trim()
-    console.log('[IdeaPost] submit called, text:', text, 'posting:', posting)
     if (!text || posting) return
     setPosting(true)
     setInput('')
-    console.log('[IdeaPost] starting fetch to /api/slack-idea')
 
-    // Slackへの通知とFirestore保存を並行実行（互いに依存しない）
     const slackPromise = fetch('/api/slack-idea', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-internal-secret': 'copelplus_internal_2026' },
       body: JSON.stringify({ text }),
-    }).then(r => {
-      console.log('[IdeaPost] fetch response status:', r.status)
-      return r.json()
-    }).then(d => console.log('[IdeaPost] Slack result:', d)).catch(e => console.warn('[IdeaPost] Slack error:', e.message))
+    }).then(r => r.json()).catch(() => {})
 
     const firestorePromise = addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
       text,
@@ -50,7 +44,6 @@ export default function IdeaPost() {
     }).catch(e => console.error('[IdeaPost] Firestore error:', e.message))
 
     await Promise.allSettled([slackPromise, firestorePromise])
-    console.log('[IdeaPost] done, setPosting false')
     setPosting(false)
   }
 
