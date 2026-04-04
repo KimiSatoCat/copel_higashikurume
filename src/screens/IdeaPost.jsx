@@ -36,12 +36,25 @@ export default function IdeaPost() {
     setInput('')
     setPosting(false)
 
-    // Slackに匿名で共有（失敗しても止まらない）
-    fetch('/api/slack-idea', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'x-internal-secret':'copelplus_internal_2026' },
-      body: JSON.stringify({ text }),
-    }).catch(() => {})
+    // Slackに匿名で共有（Service Worker完全バイパス）
+    try {
+      const r = await fetch('/api/slack-idea', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-secret': 'copelplus_internal_2026',
+          'Cache-Control': 'no-store',
+        },
+        body: JSON.stringify({ text }),
+        cache: 'no-store',
+      })
+      const result = await r.json()
+      if (!result.success) {
+        console.warn('[IdeaPost] Slack通知失敗:', result)
+      }
+    } catch (e) {
+      console.warn('[IdeaPost] Slack通知エラー:', e.message)
+    }
   }
 
   const toggleReaction = async (postId, field) => {
