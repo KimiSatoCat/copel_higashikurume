@@ -8,11 +8,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        skipWaiting: true,      // ★ 新しいSWを即座にアクティブ化
+        clientsClaim: true,     // ★ 既存の全タブを即座に制御下に置く
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            // /api/* はService Workerを一切経由させない
             urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
             handler: 'NetworkOnly',
           },
