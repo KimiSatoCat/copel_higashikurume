@@ -36,9 +36,10 @@ export default function IdeaPost() {
     setInput('')
     setPosting(false)
 
-    // Slackに匿名で共有（Service Worker完全バイパス）
+    // Slackに匿名で共有（絶対URLでService Worker完全バイパス）
     try {
-      const r = await fetch('/api/slack-idea', {
+      const origin = 'https://copel-higashikurume.vercel.app'
+      const r = await fetch(`${origin}/api/slack-idea`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -49,9 +50,7 @@ export default function IdeaPost() {
         cache: 'no-store',
       })
       const result = await r.json()
-      if (!result.success) {
-        console.warn('[IdeaPost] Slack通知失敗:', result)
-      }
+      if (!result.success) console.warn('[IdeaPost] Slack通知失敗:', result)
     } catch (e) {
       console.warn('[IdeaPost] Slack通知エラー:', e.message)
     }
