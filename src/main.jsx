@@ -3,6 +3,14 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { AuthProvider } from './contexts/AuthContext'
 
+// 古いService Workerを全て削除（PWA廃止後の残骸を消去）
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister())
+    if (regs.length > 0) console.log(`[SW] ${regs.length}件のService Workerを削除しました`)
+  })
+}
+
 // 本番URL（固定）
 const PRODUCTION_HOST = 'copel-higashikurume.vercel.app'
 

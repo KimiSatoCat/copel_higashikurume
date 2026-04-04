@@ -15,7 +15,8 @@ export default function IdeaPost() {
   const [commentInputs, setCommentInputs] = useState({})
 
   useEffect(() => {
-    const q = query(collection(db,'facilities',FACILITY_ID,'ideas'), orderBy('createdAt','desc'))
+    // 古い順（新しいメッセージが下に表示される）
+    const q = query(collection(db,'facilities',FACILITY_ID,'ideas'), orderBy('createdAt','asc'))
     const unsub = onSnapshot(q, snap => {
       setPosts(snap.docs.map(d => ({ id:d.id, ...d.data() })))
     })
@@ -26,6 +27,9 @@ export default function IdeaPost() {
     const text = input.trim()
     if (!text || posting) return
     setPosting(true)
+    setInput('')  // 先にクリアして連続投稿を防ぐ
+
+    // Firestoreに保存
     try {
       await addDoc(collection(db,'facilities',FACILITY_ID,'ideas'), {
         text,
@@ -34,30 +38,24 @@ export default function IdeaPost() {
         funnys:       [],
         comments:     [],
       })
-      setInput('')
     } catch (e) {
-      console.error('[IdeaPost] 投稿エラー:', e.message)
+      console.error('[IdeaPost] 保存エラー:', e.message)
+      setInput(text)  // 失敗したら元に戻す
       setPosting(false)
       return
     }
-    setPosting(false)
+    setPosting(false)  // 保存完了後すぐ解除（Slackを待たない）
 
-    // Slackに匿名で共有
-    try {
-      const r = await fetch('/api/slack-idea', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-secret': 'copelplus_internal_2026',
-        },
-        body: JSON.stringify({ text }),
-        cache: 'no-store',
-      })
-      const result = await r.json()
+    // Slackに匿名で共有（バックグラウンドで実行）
+    fetch('/api/slack-idea', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-internal-secret': 'copelplus_internal_2026' },
+      body: JSON.stringify({ text }),
+    }).then(r => r.json()).then(result => {
       console.log('[IdeaPost] Slack通知:', result)
-    } catch (e) {
+    }).catch(e => {
       console.warn('[IdeaPost] Slack通知エラー:', e.message)
-    }
+    })
   }
 
   const toggleReaction = async (postId, field) => {
