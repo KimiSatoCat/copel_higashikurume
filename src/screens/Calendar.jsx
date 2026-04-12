@@ -64,6 +64,7 @@ export default function Calendar() {
   const [slackConfirm, setSlackConfirm] = useState(false)
   const [slackState,   setSlackState]   = useState({ status:'idle', message:'' })
   const [slackLastSent, setSlackLastSent] = useState(null)
+  const [flashCells,   setFlashCells]   = useState(new Set()) // タップ変更時のフラッシュ対象セル
   const unsubRef  = useRef(null)
   const pendingRef = useRef({})  // ★ ローカル変更を保護（onSnapshotに上書きさせない）
 
@@ -165,6 +166,22 @@ export default function Calendar() {
         }
       }
     }).catch(err => console.warn('[Calendar] shift save:', err.code))
+  }
+
+  // ─── タップでシフトを順番に切り替える ───────────────────
+  const cycleShift = (staffId, day) => {
+    if (!can.editSchedule()) return
+    const current = (schedule.shifts || {})[staffId]?.[day] || 'off'
+    const idx  = SHIFT_OPTS.indexOf(current)
+    const next = SHIFT_OPTS[(idx + 1) % SHIFT_OPTS.length]
+    updateShift(staffId, day, next)
+
+    // 変更セルを一時的にフラッシュ（600ms）
+    const key = `${staffId}_${day}`
+    setFlashCells(prev => new Set([...prev, key]))
+    setTimeout(() => {
+      setFlashCells(prev => { const n = new Set(prev); n.delete(key); return n })
+    }, 600)
   }
 
   const saveEvent = async () => {
@@ -453,13 +470,19 @@ ${staffRows}
           <div style={{ flex:1, textAlign:'center', fontSize:17, fontWeight:800, color:C.text }}>{year}年{month}月</div>
           <button onClick={nextMonth} style={{ border:`1.5px solid ${C.border}`, background:'transparent', borderRadius:8, padding:'5px 10px', fontSize:14, cursor:'pointer', fontFamily:FONT }}>▶</button>
           <button onClick={goToday}   style={{ border:`1.5px solid ${C.primary}`, background:C.primaryLight, borderRadius:8, padding:'5px 10px', fontSize:11, cursor:'pointer', fontFamily:FONT, color:C.primaryDark, fontWeight:700 }}>今月</button>
-          {
+          {can.editSchedule() && (
             <button onClick={() => setEditMode(m=>!m)}
               style={{ border:`1.5px solid ${editMode?C.primary:C.border}`, background:editMode?C.primaryLight:'transparent', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:editMode?700:400, color:editMode?C.primaryDark:C.sub, cursor:'pointer', fontFamily:FONT }}>
-              {editMode ? '✏️ 編集中' : '編集'}
+              {editMode ? '✏️ 編集中' : '✏️ 編集'}
             </button>
-          }
+          )}
         </div>
+        {/* 編集中ヒント */}
+        {editMode && can.editSchedule() && (
+          <div style={{ fontSize:10, color:C.primaryDark, background:C.primaryLight, borderRadius:6, padding:'3px 8px', marginBottom:4, display:'inline-block' }}>
+            👆 セルをタップするたびに　出勤→遅番→外勤→休み　と切り替わります
+          </div>
+        )}
         {/* 凡例 */}
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
           {Object.entries(SHIFT).map(([k,v]) => (
@@ -540,21 +563,31 @@ ${staffRows}
                 </span>
               </div>
               {days.map(d => {
-                const type = shifts[s.id]?.[d] || 'off'
-                const cfg  = SHIFT[type]
-                const bg   = rowBg(year, month, d)
+                const type       = shifts[s.id]?.[d] || 'off'
+                const cfg        = SHIFT[type]
+                const bg         = rowBg(year, month, d)
+                const cellKey    = `${s.id}_${d}`
+                const isFlashing = editMode && flashCells.has(cellKey)
+                const canEdit    = editMode && can.editSchedule()
                 return (
                   <div key={d} style={{ width:36, flexShrink:0, marginRight:2, background:bg||'transparent' }}>
-                    {editMode ? (
-                      <select value={type} onChange={e => updateShift(s.id, d, e.target.value)}
-                        style={{ width:34, height:26, borderRadius:5, border:`1.5px solid ${cfg.dot}`, background:cfg.bg, color:cfg.color, fontSize:9, fontWeight:600, fontFamily:FONT, cursor:'pointer', textAlign:'center' }}>
-                        {SHIFT_OPTS.map(o => <option key={o} value={o}>{SHIFT[o].short}</option>)}
-                      </select>
-                    ) : (
-                      <div style={{ height:26, borderRadius:5, background:cfg.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:600, color:cfg.color }}>
-                        {cfg.short}
-                      </div>
-                    )}
+                    <div
+                      onClick={() => canEdit && cycleShift(s.id, d)}
+                      style={{
+                        height:26, borderRadius:5,
+                        background: isFlashing ? cfg.dot : cfg.bg,
+                        display:'flex', alignItems:'center', justifyContent:'center',
+                        fontSize:10, fontWeight:600,
+                        color: isFlashing ? '#fff' : cfg.color,
+                        cursor: canEdit ? 'pointer' : 'default',
+                        transform: isFlashing ? 'scale(1.15)' : 'scale(1)',
+                        transition: 'transform 0.12s ease, background 0.15s ease, color 0.15s ease',
+                        userSelect: 'none',
+                        WebkitTapHighlightColor: 'transparent',
+                      }}
+                    >
+                      {cfg.short}
+                    </div>
                   </div>
                 )
               })}
