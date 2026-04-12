@@ -1,21 +1,19 @@
 import { useState, useEffect } from 'react'
-import { collection, getDocs } from 'firebase/firestore'
-import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { useData } from '../contexts/DataContext'
-import { C, FONT, DOW_JA } from '../theme'
+import { C, FONT, DOW_JA, SHIFT } from '../theme'
 
 export default function Home({ onNavigate }) {
   const { profile, user } = useAuth()
   const { staffList, schedule, sessions, loading } = useData()
 
-  const today   = new Date()
-  const y = today.getFullYear(), m = today.getMonth()+1, d = today.getDate()
-  const label   = `${y}年${m}月${d}日（${DOW_JA[today.getDay()]}）`
+  const today = new Date()
+  const y = today.getFullYear(), m = today.getMonth() + 1, d = today.getDate()
+  const label = `${y}年${m}月${d}日（${DOW_JA[today.getDay()]}）`
 
   const [upcoming, setUpcoming] = useState([])
 
-  // 誕生日通知だけHereで計算（軽い処理）
+  // 誕生日通知（7日以内）
   useEffect(() => {
     if (!staffList.length) return
     const notices = []
@@ -23,113 +21,232 @@ export default function Home({ onNavigate }) {
       if (!s.birthday) return
       const parts = s.birthday.split('-')
       const bm = parseInt(parts[1]), bd = parseInt(parts[2])
-      const thisYear  = new Date(y, bm-1, bd)
-      const diff = Math.round((thisYear - today) / 86400000)
+      const diff = Math.round((new Date(y, bm - 1, bd) - today) / 86400000)
       if (diff >= 0 && diff <= 7) {
         const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name
         notices.push({ name, diff, date: `${bm}/${bd}` })
       }
     })
-    setUpcoming(notices.sort((a,b) => a.diff - b.diff))
+    setUpcoming(notices.sort((a, b) => a.diff - b.diff))
   }, [staffList, y, m, d])
 
-  const shifts   = schedule.shifts || {}
-  const todayIn  = staffList.filter(s => ['in','late'].includes(shifts[s.id]?.[d])).length
-  const todayExt = staffList.filter(s => shifts[s.id]?.[d] === 'ext').length
+  const shifts = schedule.shifts || {}
 
+  // 今日の出勤スタッフ（出勤→遅番→外勤の順でソート）
+  const todayStaff = staffList
+    .map(s => ({ ...s, shiftType: shifts[s.id]?.[d] || 'off' }))
+    .filter(s => s.shiftType !== 'off')
+    .sort((a, b) => ({ in: 0, late: 1, ext: 2 }[a.shiftType] ?? 9) - ({ in: 0, late: 1, ext: 2 }[b.shiftType] ?? 9))
+
+  const todayIn  = todayStaff.filter(s => ['in', 'late'].includes(s.shiftType)).length
+  const todayExt = todayStaff.filter(s => s.shiftType === 'ext').length
+
+  // 今日〜4日後の5日分
+  const weekDays = Array.from({ length: 5 }, (_, i) => {
+    const dt = new Date(y, m - 1, d + i)
+    return {
+      year:  dt.getFullYear(),
+      month: dt.getMonth() + 1,
+      day:   dt.getDate(),
+      dow:   dt.getDay(),
+      isToday:      i === 0,
+      isSameMonth:  dt.getMonth() + 1 === m && dt.getFullYear() === y,
+    }
+  })
+
+  // 今後5日間に1日でも出勤があるスタッフのみ表示
+  const weekActiveStaff = staffList.filter(s =>
+    weekDays.some(({ day, isSameMonth }) =>
+      isSameMonth && (shifts[s.id]?.[day] || 'off') !== 'off'
+    )
+  )
+
+  const hour      = today.getHours()
+  const timeGreet = hour < 10 ? 'おはようございます 🌤️' : hour < 17 ? 'こんにちは 🌞' : 'おつかれさまです 🌙'
   const dispFirst = profile?.hiraganaFirst || ''
   const greeting  = dispFirst
     ? `${dispFirst}先生`
-    : user?.displayName
-      ? `${user.displayName.split(' ')[0]}さん`
-      : ''
-
-  const hour = today.getHours()
-  const timeGreet = hour < 10 ? 'おはようございます 🌤️' : hour < 17 ? 'こんにちは 🌞' : 'おつかれさまです 🌙'
+    : user?.displayName ? `${user.displayName.split(' ')[0]}さん` : ''
 
   return (
-    <div style={{ padding:'16px', display:'flex', flexDirection:'column', gap:12 }}>
+    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* ─── 挨拶 ─── */}
       <div>
-        <div style={{ fontSize:13, color:C.sub }}>{label}</div>
-        <div style={{ fontSize:17, fontWeight:800, color:C.text, marginTop:2 }}>{timeGreet}</div>
-        {greeting && <div style={{ fontSize:15, fontWeight:700, color:C.primary, marginTop:2 }}>{greeting}</div>}
+        <div style={{ fontSize: 13, color: C.sub }}>{label}</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginTop: 2 }}>{timeGreet}</div>
+        {greeting && <div style={{ fontSize: 15, fontWeight: 700, color: C.primary, marginTop: 2 }}>{greeting}</div>}
       </div>
 
+      {/* ─── プロフィール未設定プロンプト ─── */}
       {!profile?.hiraganaFirst && (
         <div onClick={() => onNavigate?.('settings')}
-          style={{ background:`linear-gradient(135deg,${C.primaryLight},#E8F8F5)`, borderRadius:16, padding:'12px 14px', border:`1.5px solid ${C.primary}44`, cursor:'pointer' }}>
-          <div style={{ fontSize:13, fontWeight:700, color:C.primaryDark, marginBottom:3 }}>👤 プロフィールを設定してください</div>
-          <div style={{ fontSize:12, color:C.sub }}>ひらがなの名前を登録すると「〇〇先生」と表示されます›</div>
+          style={{ background: `linear-gradient(135deg,${C.primaryLight},#E8F8F5)`, borderRadius: 16, padding: '12px 14px', border: `1.5px solid ${C.primary}44`, cursor: 'pointer' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.primaryDark, marginBottom: 3 }}>👤 プロフィールを設定してください</div>
+          <div style={{ fontSize: 12, color: C.sub }}>ひらがなの名前を登録すると「〇〇先生」と表示されます ›</div>
         </div>
       )}
 
-      {/* 今日のようす */}
-      <div style={{ background:C.card, borderRadius:20, padding:14, border:`1.5px solid ${C.border}` }}>
-        <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:10 }}>📊 きょうのようす</div>
-        <div style={{ display:'flex', gap:8 }}>
+      {/* ─── クイックアクセスボタン ─── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        {[
+          { icon: '📅', label: 'シフト表',    sub: 'スケジュール管理',    to: 'calendar', bg: C.primaryLight, c: C.primaryDark, border: C.primary },
+          { icon: '🧩', label: 'コマ割り当て', sub: 'だれが・どのコマ・どの子ども', to: 'sessions',  bg: C.amberLight,   c: '#B07800',      border: C.amber   },
+        ].map(({ icon, label, sub, to, bg, c, border }) => (
+          <button key={to} onClick={() => onNavigate?.(to)}
+            style={{ background: bg, borderRadius: 16, padding: '12px 10px', border: `1.5px solid ${border}44`, cursor: 'pointer', textAlign: 'left', fontFamily: FONT }}>
+            <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: c }}>{label}</div>
+            <div style={{ fontSize: 10, color: c, opacity: 0.8 }}>{sub}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* ─── きょうのようす（スタッフ名リスト付き） ─── */}
+      <div style={{ background: C.card, borderRadius: 20, padding: 14, border: `1.5px solid ${C.border}` }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>📊 きょうのようす</div>
+
+        {/* サマリーカード3枚 */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: todayStaff.length > 0 ? 12 : 0 }}>
           {[
-            { e:'👥', l:'出勤者',  v:todayIn,         u:'名', bg:C.primaryLight,  c:C.primaryDark },
-            { e:'🧩', l:'コマ数',  v:sessions.length||0, u:'コマ', bg:C.amberLight, c:'#B07800' },
-            { e:'🚗', l:'外勤',    v:todayExt,        u:'名', bg:C.coralLight,    c:'#CC5040'  },
+            { e: '👥', l: '出勤者',  v: todayIn,            u: '名',  bg: C.primaryLight, c: C.primaryDark },
+            { e: '🧩', l: 'コマ数',  v: sessions.length||0, u: 'コマ', bg: C.amberLight,  c: '#B07800'     },
+            { e: '🚗', l: '外勤',    v: todayExt,           u: '名',  bg: C.coralLight,   c: '#CC5040'     },
           ].map(({ e, l, v, u, bg, c }) => (
-            <div key={l} style={{ flex:1, background:bg, borderRadius:14, padding:'10px 8px', textAlign:'center' }}>
-              <div style={{ fontSize:20 }}>{e}</div>
-              <div style={{ fontSize:11, color:c, marginTop:2 }}>{l}</div>
-              <div style={{ fontSize:20, fontWeight:800, color:c }}>{v}<span style={{ fontSize:11 }}>{u}</span></div>
+            <div key={l} style={{ flex: 1, background: bg, borderRadius: 14, padding: '10px 8px', textAlign: 'center' }}>
+              <div style={{ fontSize: 20 }}>{e}</div>
+              <div style={{ fontSize: 11, color: c, marginTop: 2 }}>{l}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}<span style={{ fontSize: 11 }}>{u}</span></div>
             </div>
           ))}
         </div>
-        {!staffList.length && (
-          <div style={{ fontSize:12, color:C.muted, marginTop:8, textAlign:'center' }}>
-            ⚙️ 設定 → 職員管理から職員を追加すると出勤者数が表示されます
+
+        {/* 出勤スタッフ名リスト */}
+        {todayStaff.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {todayStaff.map(s => {
+              const cfg  = SHIFT[s.shiftType]
+              const name = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', background: C.bg, borderRadius: 10 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: s.color || C.primary, flexShrink: 0 }}/>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text, flex: 1 }}>{name}</span>
+                  <span style={{ background: cfg.bg, color: cfg.color, borderRadius: 99, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+                    {cfg.label}
+                  </span>
+                </div>
+              )
+            })}
           </div>
-        )}
+        ) : !loading && staffList.length > 0 ? (
+          <div style={{ fontSize: 12, color: C.muted, textAlign: 'center' }}>本日のシフトは未登録です</div>
+        ) : !staffList.length ? (
+          <div style={{ fontSize: 12, color: C.muted, textAlign: 'center' }}>
+            ⚙️ 設定 › 職員管理から職員を追加すると出勤者数が表示されます
+          </div>
+        ) : null}
       </div>
 
-      {/* コマ割り当て */}
-      <div style={{ background:C.card, borderRadius:20, padding:14, border:`1.5px solid ${C.border}` }}>
-        <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:10 }}>🧩 きょうのコマ割り当て</div>
+      {/* ─── 今後5日間のシフト ─── */}
+      {weekActiveStaff.length > 0 && (
+        <div style={{ background: C.card, borderRadius: 20, padding: 14, border: `1.5px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>📆 今後5日間のシフト</div>
+          <div style={{ overflowX: 'auto' }}>
 
+            {/* 日付ヘッダー */}
+            <div style={{ display: 'flex', marginBottom: 5 }}>
+              <div style={{ width: 46, flexShrink: 0 }}/>
+              {weekDays.map(({ day, month: wm, dow, isToday }) => (
+                <div key={`h-${day}`} style={{ flex: 1, minWidth: 40, textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: dow === 0 ? C.coral : dow === 6 ? C.blue : C.sub }}>{DOW_JA[dow]}</div>
+                  <div style={{
+                    width: 24, height: 24, borderRadius: 6, margin: '0 auto',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: wm !== m ? 8 : 12, fontWeight: isToday ? 800 : 500,
+                    background: isToday ? C.primary : 'transparent',
+                    color: isToday ? '#fff' : dow === 0 ? C.coral : dow === 6 ? C.blue : C.text,
+                  }}>
+                    {wm !== m ? `${wm}/${day}` : day}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* スタッフ行 */}
+            {weekActiveStaff.map(s => {
+              const name = s.hiraganaFirst || (s.name || '').split(' ')[1] || (s.name || '').slice(0, 3)
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
+                  <div style={{ width: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.color || C.primary, flexShrink: 0 }}/>
+                    <span style={{ fontSize: 10, color: C.text, overflow: 'hidden', maxWidth: 34, whiteSpace: 'nowrap' }}>{name}</span>
+                  </div>
+                  {weekDays.map(({ day, isSameMonth }) => {
+                    const type = isSameMonth ? (shifts[s.id]?.[day] || 'off') : 'off'
+                    const cfg  = SHIFT[type]
+                    return (
+                      <div key={day} style={{ flex: 1, minWidth: 40, display: 'flex', justifyContent: 'center' }}>
+                        <div style={{
+                          width: 30, height: 22, borderRadius: 5,
+                          background: cfg.bg, color: cfg.color,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 9, fontWeight: 600,
+                        }}>
+                          {isSameMonth ? cfg.short : '－'}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── きょうのコマ割り当て ─── */}
+      <div style={{ background: C.card, borderRadius: 20, padding: 14, border: `1.5px solid ${C.border}` }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>🧩 きょうのコマ割り当て</div>
         {loading ? (
-          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0' }}>
-            <div style={{ width:16, height:16, borderRadius:'50%', border:`2px solid ${C.primaryLight}`, borderTopColor:C.primary, animation:'spin .7s linear infinite', flexShrink:0 }}/>
-            <span style={{ fontSize:13, color:C.sub }}>読み込み中…</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+            <div style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${C.primaryLight}`, borderTopColor: C.primary, animation: 'spin .7s linear infinite', flexShrink: 0 }}/>
+            <span style={{ fontSize: 13, color: C.sub }}>読み込み中…</span>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         ) : sessions.length === 0 ? (
-          <div style={{ fontSize:13, color:C.muted }}>本日のコマ割り当てはまだ入力されていません</div>
+          <div style={{ fontSize: 13, color: C.muted }}>本日のコマ割り当てはまだ入力されていません</div>
         ) : (
           sessions.map((s, i) => {
-            const cards = s.cards || (s.staffId ? [{ staffName:s.staffName, type:s.type||'個別', children:s.children||[] }] : [])
+            const cards  = s.cards || (s.staffId ? [{ staffName: s.staffName, type: s.type || '個別', children: s.children || [] }] : [])
             const hasAny = cards.some(c => c.staffName)
             return (
-              <div key={i} style={{ padding:'10px 0', borderBottom:i<sessions.length-1?`1px solid ${C.divider}`:'none' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5 }}>
-                  <div style={{ width:22, height:22, borderRadius:6, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:C.primary, flexShrink:0 }}>{i+1}</div>
-                  <div style={{ fontSize:12, color:C.sub, fontWeight:600 }}>{s.time}</div>
+              <div key={i} style={{ padding: '10px 0', borderBottom: i < sessions.length - 1 ? `1px solid ${C.divider}` : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                  <div style={{ width: 22, height: 22, borderRadius: 6, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.primary, flexShrink: 0 }}>{i + 1}</div>
+                  <div style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>{s.time}</div>
                 </div>
-                {hasAny ? cards.filter(c=>c.staffName).map((card, ci) => {
+                {hasAny ? cards.filter(c => c.staffName).map((card, ci) => {
                   const isGroup = card.type === '集団'
-                  const kids = (card.children||[]).filter(ch=>ch.childName)
+                  const kids    = (card.children || []).filter(ch => ch.childName)
                   return (
-                    <div key={ci} style={{ display:'flex', alignItems:'flex-start', gap:5, paddingLeft:30, marginBottom:3, flexWrap:'wrap' }}>
-                      <span style={{ fontSize:13, fontWeight:600, color:C.text, flexShrink:0 }}>{card.staffName}</span>
-                      <span style={{ fontSize:13, color:C.muted, flexShrink:0 }}>→</span>
+                    <div key={ci} style={{ display: 'flex', alignItems: 'flex-start', gap: 5, paddingLeft: 30, marginBottom: 3, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: C.text, flexShrink: 0 }}>{card.staffName}</span>
+                      <span style={{ fontSize: 13, color: C.muted, flexShrink: 0 }}>→</span>
                       {isGroup ? (
-                        <span style={{ background:C.amberLight, color:'#B07800', borderRadius:99, padding:'1px 8px', fontSize:11, fontWeight:700 }}>集団</span>
+                        <span style={{ background: C.amberLight, color: '#B07800', borderRadius: 99, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>集団</span>
                       ) : kids.length > 0 ? kids.map((ch, ki) => {
-                        const sc = ch.status==='来所済み'?{bg:C.primaryLight,c:C.primaryDark}:ch.status==='欠席'?{bg:C.coralLight,c:'#CC5040'}:{bg:C.amberLight,c:'#B07800'}
+                        const sc = ch.status === '来所済み' ? { bg: C.primaryLight, c: C.primaryDark } : ch.status === '欠席' ? { bg: C.coralLight, c: '#CC5040' } : { bg: C.amberLight, c: '#B07800' }
                         return (
-                          <span key={ki} style={{ display:'flex', alignItems:'center', gap:3 }}>
-                            <span style={{ fontSize:13, color:C.text }}>{ch.childName}さん</span>
-                            <span style={{ background:sc.bg, color:sc.c, borderRadius:99, padding:'1px 6px', fontSize:10, fontWeight:600 }}>{ch.status}</span>
+                          <span key={ki} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            <span style={{ fontSize: 13, color: C.text }}>{ch.childName}さん</span>
+                            <span style={{ background: sc.bg, color: sc.c, borderRadius: 99, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{ch.status}</span>
                           </span>
                         )
-                      }) : <span style={{ fontSize:13, color:C.muted }}>（未設定）</span>}
+                      }) : <span style={{ fontSize: 13, color: C.muted }}>（未設定）</span>}
                     </div>
                   )
                 }) : (
-                  <div style={{ paddingLeft:30, fontSize:13, color:C.muted }}>未設定</div>
+                  <div style={{ paddingLeft: 30, fontSize: 13, color: C.muted }}>未設定</div>
                 )}
               </div>
             )
@@ -137,16 +254,16 @@ export default function Home({ onNavigate }) {
         )}
       </div>
 
-      {/* 近日誕生日 */}
+      {/* ─── 近日誕生日 ─── */}
       {upcoming.length > 0 && (
-        <div style={{ background:`linear-gradient(135deg,${C.purpleLight},#FAF0FF)`, borderRadius:20, padding:14, border:`1.5px solid ${C.purple}33` }}>
-          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:10 }}>🎂 もうすぐ誕生日</div>
+        <div style={{ background: `linear-gradient(135deg,${C.purpleLight},#FAF0FF)`, borderRadius: 20, padding: 14, border: `1.5px solid ${C.purple}33` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>🎂 もうすぐ誕生日</div>
           {upcoming.map((b, i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderBottom:i<upcoming.length-1?`1px solid ${C.border}`:'none' }}>
-              <span style={{ fontSize:26 }}>{b.diff===0?'🎉':'🎂'}</span>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < upcoming.length - 1 ? `1px solid ${C.border}` : 'none' }}>
+              <span style={{ fontSize: 26 }}>{b.diff === 0 ? '🎉' : '🎂'}</span>
               <div>
-                <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{b.name}</div>
-                <div style={{ fontSize:12, color:C.sub }}>{b.diff===0?'🎉 今日が誕生日です！':`あと ${b.diff} 日（${b.date}）`}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{b.name}</div>
+                <div style={{ fontSize: 12, color: C.sub }}>{b.diff === 0 ? '🎉 今日が誕生日です！' : `あと ${b.diff} 日（${b.date}）`}</div>
               </div>
             </div>
           ))}
