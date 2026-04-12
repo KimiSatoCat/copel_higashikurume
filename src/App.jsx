@@ -6,6 +6,7 @@ import { DataProvider } from './contexts/DataContext'
 import { useSync } from './hooks/useSync'
 import { FONT, C } from './theme'
 import { scheduleDailyReport } from './utils/sheets'
+import { cacheGet } from './utils/cache'
 
 import Login    from './screens/Login'
 import BottomNav from './components/BottomNav'
@@ -111,11 +112,23 @@ export default function App() {
         const month   = today.getMonth() + 1
         const day     = today.getDate()
         const dateKey = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
-        const snap    = await getDoc(doc(db, 'facilities', FACILITY_ID, 'sessions', dateKey))
-        return { year, month, day, slots: snap.exists() ? snap.data().slots || [] : [] }
+        const ym      = `${year}-${String(month).padStart(2,'0')}`
+
+        const snap = await getDoc(doc(db, 'facilities', FACILITY_ID, 'sessions', dateKey))
+        const slots = snap.exists() ? (snap.data().slots || []) : []
+
+        // シフト集計用データをキャッシュから取得
+        const staffList = cacheGet('staffList') || []
+        const schedData = cacheGet(`schedule_${ym}`) || { shifts: {} }
+        const staffNames = {}
+        staffList.forEach(s => {
+          staffNames[s.id] = s.hiraganaFirst ? `${s.hiraganaFirst}先生` : s.name
+        })
+
+        return { year, month, day, slots, schedule: { ...schedData, staffNames } }
       } catch {
         const t = new Date()
-        return { year:t.getFullYear(), month:t.getMonth()+1, day:t.getDate(), slots:[] }
+        return { year:t.getFullYear(), month:t.getMonth()+1, day:t.getDate(), slots:[], schedule:{} }
       }
     }
     return scheduleDailyReport(getGoogleToken, getDataFn)

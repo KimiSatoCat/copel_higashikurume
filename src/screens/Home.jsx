@@ -213,39 +213,34 @@ export default function Home({ onNavigate }) {
             <span style={{ fontSize: 13, color: C.sub }}>読み込み中…</span>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
-        ) : sessions.length === 0 ? (
+        ) : sessions.filter(s => s.staffId || s.childId).length === 0 ? (
           <div style={{ fontSize: 13, color: C.muted }}>本日のコマ割り当てはまだ入力されていません</div>
         ) : (
           sessions.map((s, i) => {
-            const cards  = s.cards || (s.staffId ? [{ staffName: s.staffName, type: s.type || '個別', children: s.children || [] }] : [])
-            const hasAny = cards.some(c => c.staffName)
+            const sc = s.status === '来所済み'
+              ? { bg: C.primaryLight, c: C.primaryDark }
+              : s.status === '欠席'
+              ? { bg: C.coralLight, c: '#CC5040' }
+              : { bg: C.amberLight, c: '#B07800' }
             return (
               <div key={i} style={{ padding: '10px 0', borderBottom: i < sessions.length - 1 ? `1px solid ${C.divider}` : 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                  <div style={{ width: 22, height: 22, borderRadius: 6, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.primary, flexShrink: 0 }}>{i + 1}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <div style={{ width: 22, height: 22, borderRadius: 6, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.primary, flexShrink: 0 }}>{s.slot || i + 1}</div>
                   <div style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>{s.time}</div>
                 </div>
-                {hasAny ? cards.filter(c => c.staffName).map((card, ci) => {
-                  const isGroup = card.type === '集団'
-                  const kids    = (card.children || []).filter(ch => ch.childName)
-                  return (
-                    <div key={ci} style={{ display: 'flex', alignItems: 'flex-start', gap: 5, paddingLeft: 30, marginBottom: 3, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: C.text, flexShrink: 0 }}>{card.staffName}</span>
-                      <span style={{ fontSize: 13, color: C.muted, flexShrink: 0 }}>→</span>
-                      {isGroup ? (
-                        <span style={{ background: C.amberLight, color: '#B07800', borderRadius: 99, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>集団</span>
-                      ) : kids.length > 0 ? kids.map((ch, ki) => {
-                        const sc = ch.status === '来所済み' ? { bg: C.primaryLight, c: C.primaryDark } : ch.status === '欠席' ? { bg: C.coralLight, c: '#CC5040' } : { bg: C.amberLight, c: '#B07800' }
-                        return (
-                          <span key={ki} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <span style={{ fontSize: 13, color: C.text }}>{ch.childName}さん</span>
-                            <span style={{ background: sc.bg, color: sc.c, borderRadius: 99, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{ch.status}</span>
-                          </span>
-                        )
-                      }) : <span style={{ fontSize: 13, color: C.muted }}>（未設定）</span>}
-                    </div>
-                  )
-                }) : (
+                {s.staffId || s.childId ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: 30, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.staffName || '（未設定）'}</span>
+                    <span style={{ fontSize: 13, color: C.muted }}>→</span>
+                    {s.childName
+                      ? <>
+                          <span style={{ fontSize: 13, color: C.text }}>{s.childName}さん</span>
+                          <span style={{ background: sc.bg, color: sc.c, borderRadius: 99, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>{s.status}</span>
+                        </>
+                      : <span style={{ fontSize: 13, color: C.muted }}>（子ども未設定）</span>
+                    }
+                  </div>
+                ) : (
                   <div style={{ paddingLeft: 30, fontSize: 13, color: C.muted }}>未設定</div>
                 )}
               </div>
