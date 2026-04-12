@@ -65,6 +65,9 @@ export default function Calendar() {
   const [slackState,   setSlackState]   = useState({ status:'idle', message:'' })
   const [slackLastSent, setSlackLastSent] = useState(null)
   const [flashCells,   setFlashCells]   = useState(new Set()) // タップ変更時のフラッシュ対象セル
+  const [copyConfirm,  setCopyConfirm]  = useState(false)
+  const [copyState,    setCopyState]    = useState({ status:'idle', message:'' })
+  const [prevSchedData,setPrevSchedData]= useState(null) // 先月シフトのプレビュー用
   const unsubRef  = useRef(null)
   const pendingRef = useRef({})  // ★ ローカル変更を保護（onSnapshotに上書きさせない）
 
@@ -182,6 +185,66 @@ export default function Calendar() {
     setTimeout(() => {
       setFlashCells(prev => { const n = new Set(prev); n.delete(key); return n })
     }, 600)
+  }
+
+  // ─── 先月シフトをプレビュー取得してモーダルを開く ────────
+  const openCopyConfirm = async () => {
+    const prevY  = month === 1 ? year - 1 : year
+    const prevM  = month === 1 ? 12 : month - 1
+    const prevYm = `${prevY}-${String(prevM).padStart(2,'0')}`
+
+    setCopyState({ status:'loading', message:'' })
+
+    // キャッシュ優先、なければFirestoreから1回取得
+    let data = cacheGet(`schedule_${prevYm}`)
+    if (!data) {
+      try {
+        const snap = await getDoc(doc(db, 'facilities', FACILITY_ID, 'schedules', prevYm))
+        data = snap.exists() ? snap.data() : null
+        if (data) cacheSet(`schedule_${prevYm}`, data)
+      } catch {
+        setCopyState({ status:'error', message:'先月のデータ取得に失敗しました' })
+        setTimeout(() => setCopyState({ status:'idle', message:'' }), 4000)
+        return
+      }
+    }
+
+    setPrevSchedData(data)
+    setCopyState({ status:'idle', message:'' })
+    setCopyConfirm(true)
+  }
+
+  // ─── 先月シフトを今月に一括コピー ───────────────────────
+  const executeCopy = async () => {
+    setCopyConfirm(false)
+    setCopyState({ status:'loading', message:'コピー中…' })
+
+    const prevShifts = prevSchedData?.shifts || {}
+    // 今月の日数を超える日はスキップ
+    const newShifts = {}
+    for (const [staffId, dayMap] of Object.entries(prevShifts)) {
+      const filtered = {}
+      for (const [day, type] of Object.entries(dayMap)) {
+        if (parseInt(day) <= daysInMonth) filtered[day] = type
+      }
+      if (Object.keys(filtered).length > 0) newShifts[staffId] = filtered
+    }
+
+    const staffCount = Object.keys(newShifts).length
+    const entryCount = Object.values(newShifts).reduce((s, m) => s + Object.keys(m).length, 0)
+
+    try {
+      // shifts フィールドのみ完全上書き（events は保持）
+      await setDoc(
+        doc(db, 'facilities', FACILITY_ID, 'schedules', ym),
+        { shifts: newShifts },
+        { merge: true }
+      )
+      setCopyState({ status:'success', message:`✅ ${staffCount}名・${entryCount}件のシフトをコピーしました` })
+    } catch (err) {
+      setCopyState({ status:'error', message:`❌ コピーに失敗しました: ${err.message}` })
+    }
+    setTimeout(() => setCopyState({ status:'idle', message:'' }), 5000)
   }
 
   const saveEvent = async () => {
@@ -477,10 +540,24 @@ ${staffRows}
             </button>
           )}
         </div>
-        {/* 編集中ヒント */}
+        {/* 編集中ヒント + 先月コピーボタン */}
         {editMode && can.editSchedule() && (
-          <div style={{ fontSize:10, color:C.primaryDark, background:C.primaryLight, borderRadius:6, padding:'3px 8px', marginBottom:4, display:'inline-block' }}>
-            👆 セルをタップするたびに　出勤→遅番→外勤→休み　と切り替わります
+          <div style={{ display:'flex', alignItems:'center', gap:7, flexWrap:'wrap', marginBottom:2 }}>
+            <div style={{ fontSize:10, color:C.primaryDark, background:C.primaryLight, borderRadius:6, padding:'3px 8px' }}>
+              👆 タップで　出勤→遅番→外勤→休み　に切り替え
+            </div>
+            {copyState.status === 'idle' ? (
+              <button onClick={openCopyConfirm}
+                style={{ fontSize:10, color:C.sub, background:'transparent', border:`1px solid ${C.border}`, borderRadius:6, padding:'3px 8px', cursor:'pointer', fontFamily:FONT, whiteSpace:'nowrap' }}>
+                📋 先月をコピー
+              </button>
+            ) : copyState.status === 'loading' ? (
+              <span style={{ fontSize:10, color:C.sub }}>📋 取得中…</span>
+            ) : (
+              <span style={{ fontSize:10, color: copyState.status==='success' ? C.primaryDark : C.coral }}>
+                {copyState.message}
+              </span>
+            )}
           </div>
         )}
         {/* 凡例 */}
@@ -650,6 +727,82 @@ ${staffRows}
           ※ Googleカレンダー：選択した職員の勤務のみ保存されます　　※ PDF：A4横向き　　※ Slack：テキスト形式で共有
         </div>
       </div>
+
+      {/* ─── 先月シフトコピー確認モーダル ─── */}
+      {copyConfirm && (() => {
+        const prevY  = month === 1 ? year - 1 : year
+        const prevM  = month === 1 ? 12 : month - 1
+        const prevShifts = prevSchedData?.shifts || {}
+
+        // コピー内容を集計
+        let copyStaff = 0, copyEntries = 0, skippedEntries = 0
+        const prevDaysInMonth = new Date(prevY, prevM, 0).getDate()
+        for (const [, dayMap] of Object.entries(prevShifts)) {
+          const valid   = Object.entries(dayMap).filter(([d]) => parseInt(d) <= daysInMonth && dayMap[d] !== 'off')
+          const skipped = Object.entries(dayMap).filter(([d]) => parseInt(d) > daysInMonth)
+          if (valid.length > 0) { copyStaff++; copyEntries += valid.length }
+          skippedEntries += skipped.length
+        }
+
+        // 今月に既存シフトがあるか
+        const hasExisting = Object.values(schedule.shifts || {}).some(m => Object.keys(m).length > 0)
+
+        return (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }}>
+            <div style={{ background:C.card, borderRadius:20, padding:24, width:'100%', maxWidth:380 }}>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>
+                📋 先月のシフトをコピー
+              </div>
+
+              {/* コピー内容プレビュー */}
+              <div style={{ background:C.primaryLight, borderRadius:14, padding:'14px 16px', marginBottom:12, border:`1.5px solid ${C.primary}44` }}>
+                <div style={{ fontSize:13, fontWeight:700, color:C.primaryDark, marginBottom:8 }}>
+                  {prevY}年{prevM}月 → {year}年{month}月
+                </div>
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                  <span style={{ background:'#fff', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700, color:C.primaryDark, border:`1px solid ${C.primary}44` }}>
+                    👤 {copyStaff}名のシフト
+                  </span>
+                  <span style={{ background:'#fff', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700, color:C.primaryDark, border:`1px solid ${C.primary}44` }}>
+                    📆 {copyEntries}件をコピー
+                  </span>
+                  {skippedEntries > 0 && (
+                    <span style={{ background:'#FFF8E1', borderRadius:8, padding:'4px 10px', fontSize:11, color:'#7A5000', border:'1px solid #FFD54F' }}>
+                      ⚠ {prevDaysInMonth - daysInMonth}日分はスキップ
+                    </span>
+                  )}
+                </div>
+                {copyEntries === 0 && (
+                  <div style={{ fontSize:12, color:C.muted, marginTop:6 }}>
+                    先月に登録されたシフトがありません
+                  </div>
+                )}
+              </div>
+
+              {/* 上書き警告 */}
+              {hasExisting && (
+                <div style={{ background:'#FFF0EC', borderRadius:10, padding:'10px 12px', marginBottom:12, border:'1.5px solid #FFCCBC', fontSize:12, color:C.coral }}>
+                  ⚠️ <strong>今月のシフトはすべて上書きされます。</strong><br/>
+                  <span style={{ color:C.sub }}>イベント（行事予定）は変更されません。</span>
+                </div>
+              )}
+
+              <div style={{ display:'flex', gap:10 }}>
+                <button
+                  onClick={executeCopy}
+                  disabled={copyEntries === 0}
+                  style={{ flex:2, padding:'13px', borderRadius:12, border:'none', background: copyEntries===0 ? C.muted : C.primary, color:'#fff', fontSize:14, fontWeight:700, cursor: copyEntries===0 ? 'default' : 'pointer', fontFamily:FONT }}>
+                  コピーする
+                </button>
+                <button onClick={() => setCopyConfirm(false)}
+                  style={{ flex:1, padding:'13px', borderRadius:12, border:`1.5px solid ${C.border}`, background:'transparent', color:C.sub, fontSize:14, cursor:'pointer', fontFamily:FONT }}>
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ─── Slack共有確認モーダル ─── */}
       {slackConfirm && (() => {
