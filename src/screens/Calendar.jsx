@@ -603,6 +603,8 @@ ${staffRows}
                 )}
               </div>
             ))}
+            {/* 集計カラムのスペーサー */}
+            <div style={{ position:'sticky', right:0, flexShrink:0, width:50, background:C.bg, borderLeft:`1px solid ${C.border}` }}/>
           </div>
 
           {/* 日付ヘッダー行 */}
@@ -626,6 +628,10 @@ ${staffRows}
                 </button>
               )
             })}
+            {/* 集計カラムのヘッダー */}
+            <div style={{ position:'sticky', right:0, flexShrink:0, width:50, background:C.bg, borderLeft:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <span style={{ fontSize:9, color:C.sub, fontWeight:700 }}>合計</span>
+            </div>
           </div>
 
           {/* スタッフ行 */}
@@ -668,6 +674,35 @@ ${staffRows}
                   </div>
                 )
               })}
+              {/* ── 月間集計バッジ（スクロールしても右端に固定） ── */}
+              {(() => {
+                const inC   = days.filter(d => shifts[s.id]?.[d] === 'in').length
+                const lateC = days.filter(d => shifts[s.id]?.[d] === 'late').length
+                const extC  = days.filter(d => shifts[s.id]?.[d] === 'ext').length
+                const total = inC + lateC + extC
+                const parts = [
+                  inC   > 0 && `○${inC}`,
+                  lateC > 0 && `遅${lateC}`,
+                  extC  > 0 && `外${extC}`,
+                ].filter(Boolean)
+                return (
+                  <div style={{
+                    position:'sticky', right:0, flexShrink:0, width:50,
+                    background:C.bg, borderLeft:`1px solid ${C.border}`,
+                    display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+                    height:26, gap:0,
+                  }}>
+                    <span style={{ fontSize:11, fontWeight:800, lineHeight:1.1, color: total > 0 ? C.primaryDark : C.muted }}>
+                      計{total}
+                    </span>
+                    {parts.length > 0 && (
+                      <span style={{ fontSize:8, color:C.sub, lineHeight:1.1 }}>
+                        {parts.join(' ')}
+                      </span>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           ))}
         </div>
