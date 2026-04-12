@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { collection, getDocs, doc, updateDoc, setDoc, deleteDoc, getDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
+import { useData } from '../contexts/DataContext'
 import { C, FONT, ROLES } from '../theme'
 
 const ROLE_LABELS = {
@@ -25,6 +26,7 @@ export default function Settings() {
     devMode, enableDevMode, clearDevMode,
     verifyDevPassword, signOut, can, updateLocalProfile,
   } = useAuth()
+  const { refreshStaff, refreshChildren } = useData()
 
   const [tab,       setTab]      = useState('none')
   const [staffList, setStaffList]= useState([])
@@ -96,6 +98,7 @@ export default function Settings() {
       setAcctMsg('✅ 保存しました')
       setTimeout(() => setAcctMsg(''), 3000)
       setDoc(doc(db,'facilities',FACILITY_ID,'staff',user.uid), data, { merge:true })
+        .then(() => refreshStaff())
         .catch(err => console.error('[saveAccount]', err.message))
     } catch (err) {
       setAcctMsg(`❌ ${err.message}`)
@@ -110,8 +113,9 @@ export default function Settings() {
       ? prev.map(x => x.id===s.id ? s : x)
       : [...prev, s]
     )
-    // バックグラウンドで保存（エラーはコンソールに記録するだけ）
+    // バックグラウンドで保存し、DataContextのキャッシュも更新
     setDoc(doc(db,'facilities',FACILITY_ID,'staff',s.id), s, { merge:true })
+      .then(() => refreshStaff())
       .catch(err => console.error('[saveStaff]', err.message))
     return true
   }
@@ -122,6 +126,7 @@ export default function Settings() {
     // ★ UIを先に更新
     setStaffList(prev => prev.filter(x => x.id !== id))
     deleteDoc(doc(db,'facilities',FACILITY_ID,'staff',id))
+      .then(() => refreshStaff())
       .catch(err => console.error('[deleteStaff]', err.message))
   }
 
@@ -135,6 +140,7 @@ export default function Settings() {
       : [...prev, saved]
     )
     setDoc(doc(db,'facilities',FACILITY_ID,'children',id), saved, { merge:true })
+      .then(() => refreshChildren())
       .catch(err => console.error('[saveChild]', err.message))
     return true
   }
@@ -147,6 +153,7 @@ export default function Settings() {
       updateLocalProfile({ role: newRole })
     }
     updateDoc(doc(db,'facilities',FACILITY_ID,'staff',uid), { role: newRole })
+      .then(() => refreshStaff())
       .catch(err => {
         setStaffList(prev => prev.map(s => s.id===uid ? {...s, role: s.role} : s))
         alert(`権限の変更に失敗しました。\n${err.message}\n\nFirebaseコンソールで自分のroleを「admin」に変更してから試してください。`)
@@ -176,6 +183,7 @@ export default function Settings() {
     }
     await setDoc(ref, data)
     setStaffList(prev => [...prev, { id, ...data }])
+    refreshStaff()
     alert('✅「テスト 職員」を追加しました')
   }
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db, FACILITY_ID } from './firebase'
 import { useAuth } from './contexts/AuthContext'
@@ -8,14 +8,16 @@ import { FONT, C } from './theme'
 import { scheduleDailyReport } from './utils/sheets'
 
 import Login    from './screens/Login'
-import Home     from './screens/Home'
-import Calendar from './screens/Calendar'
-import Sessions from './screens/Sessions'
-import IdeaPost from './screens/IdeaPost'
-import Hidamari from './screens/Hidamari'
-import Settings from './screens/Settings'
 import BottomNav from './components/BottomNav'
 import SideNav   from './components/SideNav'
+
+// 各画面は初回表示時にのみJSを読み込む（初期バンドルを軽量化）
+const Home     = lazy(() => import('./screens/Home'))
+const Calendar = lazy(() => import('./screens/Calendar'))
+const Sessions = lazy(() => import('./screens/Sessions'))
+const IdeaPost = lazy(() => import('./screens/IdeaPost'))
+const Hidamari = lazy(() => import('./screens/Hidamari'))
+const Settings = lazy(() => import('./screens/Settings'))
 
 const SCREEN_MAP = { home:Home, calendar:Calendar, sessions:Sessions, ideas:IdeaPost, hidamari:Hidamari, settings:Settings }
 const ALL_TABS   = Object.keys(SCREEN_MAP)
@@ -40,6 +42,18 @@ function RoleBadge({ role }) {
   )
 }
 
+// 画面切り替え中のフォールバック（Suspense用）
+function ScreenFallback() {
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', background:C.bg }}>
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:36, marginBottom:10 }}>🌿</div>
+        <div style={{ fontSize:13, color:C.sub, fontFamily:FONT }}>読み込み中…</div>
+      </div>
+    </div>
+  )
+}
+
 // 全タブを常時マウントし、非アクティブはCSSで非表示（即時切り替え）
 function KeepAliveScreens({ tab, setTab, visited }) {
   return (
@@ -55,7 +69,9 @@ function KeepAliveScreens({ tab, setTab, visited }) {
         const isActive = tab === id
         return (
           <div key={id} className={`ka-screen ${isActive ? 'active' : 'inactive'}`}>
-            {id === 'home' ? <Home onNavigate={setTab}/> : <Comp />}
+            <Suspense fallback={<ScreenFallback />}>
+              {id === 'home' ? <Home onNavigate={setTab}/> : <Comp />}
+            </Suspense>
           </div>
         )
       })}

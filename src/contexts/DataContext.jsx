@@ -1,9 +1,9 @@
 // DataContext: staffList / children / schedule / sessions を App 起動時に一括取得
 // → 各画面は Firestore に触れずキャッシュ済みデータを即時参照できる
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { collection, doc, onSnapshot, getDocs } from 'firebase/firestore'
 import { db, FACILITY_ID } from '../firebase'
-import { cacheGet, cacheSet } from '../utils/cache'
+import { cacheGet, cacheSet, cacheClear } from '../utils/cache'
 
 const Ctx = createContext(null)
 
@@ -28,6 +28,28 @@ export function DataProvider({ user, children }) {
   const [loadingSessions, setLoadingSessions] = useState(!cacheGet(`sessions_${dateKey}`))
 
   const loading = loadingStaff || loadingSchedule || loadingSessions
+
+  // ── 職員リストを再取得してキャッシュ更新（Settings側から呼び出す） ──
+  const refreshStaff = useCallback(async () => {
+    cacheClear('staffList')
+    try {
+      const s = await getDocs(collection(db,'facilities',FACILITY_ID,'staff'))
+      const list = s.docs.filter(d=>d.data().active!==false).map(d=>({id:d.id,...d.data()}))
+      setStaffList(list)
+      cacheSet('staffList', list)
+    } catch (_) {}
+  }, [])
+
+  // ── 児童リストを再取得してキャッシュ更新 ────────────────────
+  const refreshChildren = useCallback(async () => {
+    cacheClear('children')
+    try {
+      const s = await getDocs(collection(db,'facilities',FACILITY_ID,'children'))
+      const list = s.docs.map(d=>({id:d.id,...d.data()}))
+      setChildren2(list)
+      cacheSet('children', list)
+    } catch (_) {}
+  }, [])
 
   useEffect(() => {
     if (!user) return
@@ -70,7 +92,7 @@ export function DataProvider({ user, children }) {
   }, [user, ym, dateKey])
 
   return (
-    <Ctx.Provider value={{ staffList, children: children2, schedule, sessions, loading, ym, dateKey, today:{ y,m,d } }}>
+    <Ctx.Provider value={{ staffList, children: children2, schedule, sessions, loading, ym, dateKey, today:{ y,m,d }, refreshStaff, refreshChildren }}>
       {children}
     </Ctx.Provider>
   )

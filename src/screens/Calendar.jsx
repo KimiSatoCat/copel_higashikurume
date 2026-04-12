@@ -49,7 +49,11 @@ export default function Calendar() {
   const [month,     setMonth]     = useState(today.getMonth() + 1)
   const [staffList, setStaffList] = useState(() => cachedStaff.length ? cachedStaff : (cacheGet('staffList') || []))
   const [schedule,  setSchedule]  = useState(() => cacheGet(`schedule_${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || { shifts:{}, events:{} })
-  const [loading,   setLoading]   = useState(true)
+  // キャッシュがあればローディングなしで即表示、なければ取得を待つ
+  const [loading,   setLoading]   = useState(() => {
+    const initYm = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`
+    return !cacheGet(`schedule_${initYm}`)
+  })
   const [editMode,  setEditMode]  = useState(false)
   const [modalDay,  setModalDay]  = useState(null)
   const [eventInput,setEventInput]= useState('')
