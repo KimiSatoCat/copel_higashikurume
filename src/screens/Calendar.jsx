@@ -63,6 +63,7 @@ export default function Calendar() {
   const [gcalTargetId, setGcalTargetId] = useState('')
   const [slackConfirm, setSlackConfirm] = useState(false)
   const [slackState,   setSlackState]   = useState({ status:'idle', message:'' })
+  const [slackLastSent, setSlackLastSent] = useState(null)
   const unsubRef  = useRef(null)
   const pendingRef = useRef({})  // ★ ローカル変更を保護（onSnapshotに上書きさせない）
 
@@ -125,6 +126,14 @@ export default function Calendar() {
     )
     return () => { if (unsubRef.current) unsubRef.current() }
   }, [ym, month, year, cachedStaff])
+
+  // 月切り替え時に最終Slack送信日時を更新
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`slackLastSent_${ym}`)
+      setSlackLastSent(saved || null)
+    } catch { setSlackLastSent(null) }
+  }, [ym])
 
   const prevMonth = () => { if(month===1){setYear(y=>y-1);setMonth(12)}else setMonth(m=>m-1) }
   const nextMonth = () => { if(month===12){setYear(y=>y+1);setMonth(1)}else setMonth(m=>m+1) }
@@ -395,7 +404,6 @@ ${staffRows}
     setSlackConfirm(false)
     setSlackState({ status:'loading', message:'シフト表を生成中…' })
     try {
-      // PDFとして保存するのと同じHTMLを生成してSlackにアップロード
       const html = generateShiftHtml()
       setSlackState({ status:'loading', message:'Slackにアップロード中…' })
       const res = await fetch('/api/slack-upload-shift', {
@@ -408,12 +416,26 @@ ${staffRows}
       })
       const result = await res.json()
       if (result.success) {
+        // 送信日時をlocalStorageに保存
+        const sentAt = new Date().toISOString()
+        try { localStorage.setItem(`slackLastSent_${ym}`, sentAt) } catch {}
+        setSlackLastSent(sentAt)
         setSlackState({ status:'success', message:`✅ ${year}年${month}月のシフト表をSlackに共有しました` })
       } else {
-        setSlackState({ status:'error', message: result.error || '共有に失敗しました' })
+        const errMsg = result.error || '共有に失敗しました'
+        const friendly = errMsg.includes('Webhook') || errMsg.includes('webhook')
+          ? 'Slackへの接続に失敗しました。しばらく待ってから再度お試しください。'
+          : errMsg.includes('blob') || errMsg.includes('Blob')
+          ? 'ファイルのアップロードに失敗しました。ネットワーク接続をご確認ください。'
+          : errMsg
+        setSlackState({ status:'error', message: `❌ ${friendly}` })
       }
     } catch (err) {
-      setSlackState({ status:'error', message: `共有に失敗しました: ${err.message}` })
+      const friendly = !navigator.onLine
+        ? 'オフラインです。ネットワーク接続を確認してから再試行してください。'
+        : 'Slackへの共有に失敗しました。時間をおいて再度お試しください。'
+      setSlackState({ status:'error', message: `❌ ${friendly}` })
+      console.error('[Slack]', err.message)
     }
     setTimeout(() => setSlackState({ status:'idle', message:'' }), 8000)
   }
@@ -569,10 +591,17 @@ ${staffRows}
 
         {/* Slack共有 */}
         {slackState.status === 'idle' ? (
-          <button onClick={() => setSlackConfirm(true)}
-            style={{ width:'100%', padding:'12px', borderRadius:13, border:'1.5px solid #4A154B', background:'#F9F0FA', display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:'#4A154B', cursor:'pointer', fontFamily:FONT }}>
-            💬 Slackにシフト表を共有する
-          </button>
+          <div>
+            <button onClick={() => setSlackConfirm(true)}
+              style={{ width:'100%', padding:'12px', borderRadius:13, border:'1.5px solid #4A154B', background:'#F9F0FA', display:'flex', alignItems:'center', justifyContent:'center', gap:9, fontSize:13, fontWeight:700, color:'#4A154B', cursor:'pointer', fontFamily:FONT }}>
+              💬 Slackにシフト表を共有する
+            </button>
+            {slackLastSent && (
+              <div style={{ textAlign:'center', fontSize:10, color:C.muted, marginTop:4 }}>
+                最終送信：{new Date(slackLastSent).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}
+              </div>
+            )}
+          </div>
         ) : slackState.status === 'loading' ? (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'12px', borderRadius:13, background:'#F9F0FA' }}>
             <div style={{ width:16, height:16, borderRadius:'50%', border:'2px solid #E9D0EA', borderTopColor:'#4A154B', animation:'spin .7s linear infinite' }}/>
@@ -590,27 +619,76 @@ ${staffRows}
       </div>
 
       {/* ─── Slack共有確認モーダル ─── */}
-      {slackConfirm && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }}>
-          <div style={{ background:C.card, borderRadius:20, padding:24, width:'100%', maxWidth:360 }}>
-            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:8 }}>💬 Slackにシフト表を共有</div>
-            <div style={{ fontSize:13, color:C.sub, lineHeight:1.7, marginBottom:20 }}>
-              <strong>{year}年{month}月のシフト表</strong>をSlackに共有しますか？<br/>
-              テキスト形式でこころのひだまりと同じチャンネルに送信されます。
-            </div>
-            <div style={{ display:'flex', gap:10 }}>
-              <button onClick={shareToSlack}
-                style={{ flex:2, padding:'12px', borderRadius:12, border:'none', background:'#4A154B', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
-                はい、共有する
-              </button>
-              <button onClick={() => setSlackConfirm(false)}
-                style={{ flex:1, padding:'12px', borderRadius:12, border:`1.5px solid ${C.border}`, background:'transparent', color:C.sub, fontSize:14, cursor:'pointer', fontFamily:FONT }}>
-                キャンセル
-              </button>
+      {slackConfirm && (() => {
+        const sh = schedule.shifts || {}
+        // シフト内訳を集計
+        let countIn = 0, countLate = 0, countExt = 0, activeStaff = new Set()
+        staffList.forEach(s => {
+          days.forEach(d => {
+            const t = sh[s.id]?.[d]
+            if (t === 'in')   { countIn++;   activeStaff.add(s.id) }
+            if (t === 'late') { countLate++; activeStaff.add(s.id) }
+            if (t === 'ext')  { countExt++;  activeStaff.add(s.id) }
+          })
+        })
+        const lastSentLabel = slackLastSent
+          ? new Date(slackLastSent).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })
+          : null
+
+        return (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }}>
+            <div style={{ background:C.card, borderRadius:20, padding:24, width:'100%', maxWidth:380 }}>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:14 }}>💬 Slackにシフト表を共有</div>
+
+              {/* シフト表プレビューカード */}
+              <div style={{ background:'#F3EEF9', borderRadius:14, padding:'14px 16px', marginBottom:14, border:'1.5px solid #D4B8E0' }}>
+                <div style={{ fontSize:13, fontWeight:800, color:'#4A154B', marginBottom:10 }}>
+                  📅 {year}年{month}月 シフト表
+                </div>
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:8 }}>
+                  <span style={{ background:'#fff', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700, color:'#4A154B', border:'1px solid #D4B8E0' }}>
+                    👤 稼働 {activeStaff.size}名 / {staffList.length}名
+                  </span>
+                  <span style={{ background:'#fff', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700, color:'#4A154B', border:'1px solid #D4B8E0' }}>
+                    📆 {daysInMonth}日間
+                  </span>
+                </div>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {countIn   > 0 && <span style={{ background:'#E8F6F3', borderRadius:6, padding:'3px 8px', fontSize:11, color:'#2D8B75', fontWeight:600 }}>🟢 出勤 {countIn}件</span>}
+                  {countLate > 0 && <span style={{ background:'#FFF8E8', borderRadius:6, padding:'3px 8px', fontSize:11, color:'#9A6700', fontWeight:600 }}>🟡 遅番 {countLate}件</span>}
+                  {countExt  > 0 && <span style={{ background:'#FFF0EC', borderRadius:6, padding:'3px 8px', fontSize:11, color:'#C45030', fontWeight:600 }}>🟠 外勤 {countExt}件</span>}
+                  {countIn + countLate + countExt === 0 && (
+                    <span style={{ fontSize:11, color:C.muted }}>シフト未登録です</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 最終送信履歴 */}
+              {lastSentLabel ? (
+                <div style={{ background:C.amberLight, borderRadius:10, padding:'8px 12px', marginBottom:14, fontSize:12, color:'#7A5000', display:'flex', alignItems:'center', gap:6 }}>
+                  <span>⏱</span>
+                  <span>前回送信：{lastSentLabel}　<span style={{ fontWeight:700 }}>再送信</span>になります</span>
+                </div>
+              ) : (
+                <div style={{ fontSize:12, color:C.sub, marginBottom:14, paddingLeft:4 }}>
+                  ※ シフトチャンネルに送信されます
+                </div>
+              )}
+
+              <div style={{ display:'flex', gap:10 }}>
+                <button onClick={shareToSlack}
+                  style={{ flex:2, padding:'13px', borderRadius:12, border:'none', background:'#4A154B', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:FONT }}>
+                  送信する
+                </button>
+                <button onClick={() => setSlackConfirm(false)}
+                  style={{ flex:1, padding:'13px', borderRadius:12, border:`1.5px solid ${C.border}`, background:'transparent', color:C.sub, fontSize:14, cursor:'pointer', fontFamily:FONT }}>
+                  キャンセル
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ─── Googleカレンダー保存：本人確認モーダル ─── */}
       {gcalConfirm && (
